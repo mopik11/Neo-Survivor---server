@@ -5,7 +5,7 @@ const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-    cors: { origin: "*" } // Povoluje připojení z tvých GitHub Pages
+    cors: { origin: "*" }
 });
 
 const ROOMS = {};
@@ -36,7 +36,13 @@ io.on('connection', (socket) => {
                 enemies: [],
                 gems: [],
                 time: 0,
-                lastBossTime: 0
+                lastBossTime: 0,
+                level: 1,
+                xp: 0,
+                nextLevelXp: 100,
+                paused: false,
+                readyCount: 0,
+                isGameOver: false
             };
         }
 
@@ -50,6 +56,26 @@ io.on('connection', (socket) => {
     socket.on('playerUpdate', (data) => {
         if (currentRoom && ROOMS[currentRoom] && ROOMS[currentRoom].players[socket.id]) {
             Object.assign(ROOMS[currentRoom].players[socket.id], data);
+            
+            // Pokud hráč zemřel, vyvolej sdílený Game Over a reset
+            if (data.dead && !ROOMS[currentRoom].isGameOver) {
+                ROOMS[currentRoom].isGameOver = true;
+                io.to(currentRoom).emit('teamGameOver');
+                
+                // Zresetujeme místnost pro další hru
+                ROOMS[currentRoom].level = 1;
+                ROOMS[currentRoom].xp = 0;
+                ROOMS[currentRoom].nextLevelXp = 100;
+                ROOMS[currentRoom].enemies = [];
+                ROOMS[currentRoom].gems = [];
+                ROOMS[currentRoom].time = 0;
+                ROOMS[currentRoom].paused = false;
+                
+                // Ochrana proti vícenásobnému resetu
+                setTimeout(() => {
+                    if (ROOMS[currentRoom]) ROOMS[currentRoom].isGameOver = false;
+                }, 3000);
+            }
         }
     });
 
@@ -74,9 +100,34 @@ io.on('connection', (socket) => {
 
     socket.on('gemPickup', (gemId) => {
         if (currentRoom && ROOMS[currentRoom]) {
-            ROOMS[currentRoom].gems = ROOMS[currentRoom].gems.filter(g => g.id !== gemId);
-            // Rozešleme info, že gem byl sebrán
+            const room = ROOMS[currentRoom];
+            room.gems = room.gems.filter(g => g.id !== gemId);
             io.to(currentRoom).emit('gemCollected', { gemId: gemId, playerId: socket.id });
+            
+            // Sdílené XP!
+            room.xp += 10;
+            if (room.xp >= room.nextLevelXp) {
+                room.level++;
+                room.xp -= room.nextLevelXp;
+                room.nextLevelXp = Math.floor(room.nextLevelXp * 1.25);
+                room.paused = true;
+                room.readyCount = 0; // Resetujeme čítač připravených hráčů
+                io.to(currentRoom).emit('teamLevelUp', { level: room.level });
+            }
+        }
+    });
+    
+    socket.on('upgradePicked', () => {
+        if (currentRoom && ROOMS[currentRoom]) {
+            const room = ROOMS[currentRoom];
+            room.readyCount++;
+            const activePlayers = Object.values(room.players).filter(p => !p.dead).length;
+            
+            // Jakmile si všichni živí hráči vyberou upgrade, odpausujeme hru
+            if (room.readyCount >= activePlayers) {
+                room.paused = false;
+                io.to(currentRoom).emit('resumeGame');
+            }
         }
     });
 
@@ -85,7 +136,7 @@ io.on('connection', (socket) => {
         if (currentRoom && ROOMS[currentRoom]) {
             delete ROOMS[currentRoom].players[socket.id];
             if (Object.keys(ROOMS[currentRoom].players).length === 0) {
-                delete ROOMS[currentRoom]; // Zrušit prázdnou místnost
+                delete ROOMS[currentRoom];
             }
         }
     });
@@ -95,11 +146,12 @@ io.on('connection', (socket) => {
 setInterval(() => {
     for (const roomId in ROOMS) {
         const room = ROOMS[roomId];
+        if (room.paused || room.isGameOver) continue; // Nepřátelé se nehýbou, pokud mají hráči level up menu
+        
         room.time += 1 / 20;
-
         const playersArr = Object.values(room.players).filter(p => !p.dead);
         
-        // Spawn nepřátel
+        // Spawn nepřátel (škáluje se na základě sdíleného levelu)
         if (playersArr.length > 0 && Math.random() < (1 / (20 * (CONFIG.SPAWN_INTERVAL / 1000)))) {
             const pivot = playersArr[Math.floor(Math.random() * playersArr.length)];
             const a = Math.random() * Math.PI * 2;
@@ -111,7 +163,7 @@ setInterval(() => {
             let isBoss = false;
             let hp = CONFIG.ENEMY_BASE_HEALTH * mod;
             
-            if (pivot.level >= 20 && (room.time - room.lastBossTime > CONFIG.BOSS_INTERVAL)) {
+            if (room.level >= 20 && (room.time - room.lastBossTime > CONFIG.BOSS_INTERVAL)) {
                 isBoss = true;
                 hp = CONFIG.ENEMY_BASE_HEALTH * 30 * mod;
                 room.lastBossTime = room.time;
@@ -133,12 +185,16 @@ setInterval(() => {
             enemy.y += Math.sin(angle) * speed;
         });
 
-        // Odeslání stavu všem v místnosti
         io.to(roomId).emit('stateUpdate', {
             players: room.players,
             enemies: room.enemies,
             gems: room.gems,
-            time: room.time
+            time: room.time,
+            roomInfo: {
+                level: room.level,
+                xp: room.xp,
+                nextLevelXp: room.nextLevelXp
+            }
         });
     }
 }, 50);
