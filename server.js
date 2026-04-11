@@ -35,6 +35,7 @@ io.on('connection', (socket) => {
                 players: {},
                 enemies: [],
                 gems: [],
+                baits: [],
                 time: 0,
                 lastBossTime: 0,
                 level: 1,
@@ -57,21 +58,19 @@ io.on('connection', (socket) => {
         if (currentRoom && ROOMS[currentRoom] && ROOMS[currentRoom].players[socket.id]) {
             Object.assign(ROOMS[currentRoom].players[socket.id], data);
             
-            // Pokud hráč zemřel, vyvolej sdílený Game Over a reset
             if (data.dead && !ROOMS[currentRoom].isGameOver) {
                 ROOMS[currentRoom].isGameOver = true;
                 io.to(currentRoom).emit('teamGameOver');
                 
-                // Zresetujeme místnost pro další hru
                 ROOMS[currentRoom].level = 1;
                 ROOMS[currentRoom].xp = 0;
                 ROOMS[currentRoom].nextLevelXp = 100;
                 ROOMS[currentRoom].enemies = [];
                 ROOMS[currentRoom].gems = [];
+                ROOMS[currentRoom].baits = [];
                 ROOMS[currentRoom].time = 0;
                 ROOMS[currentRoom].paused = false;
                 
-                // Ochrana proti vícenásobnému resetu
                 setTimeout(() => {
                     if (ROOMS[currentRoom]) ROOMS[currentRoom].isGameOver = false;
                 }, 3000);
@@ -98,20 +97,41 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Podpora návnady (Bait)
+    socket.on('spawnBait', (data) => {
+        if (currentRoom && ROOMS[currentRoom]) {
+            ROOMS[currentRoom].baits.push({
+                id: Math.random().toString(36).substr(2, 9),
+                x: data.x, y: data.y, hp: data.hp, maxHp: data.hp
+            });
+        }
+    });
+
+    socket.on('baitHit', (data) => {
+        if (currentRoom && ROOMS[currentRoom]) {
+            const bait = ROOMS[currentRoom].baits.find(b => b.id === data.id);
+            if (bait) {
+                bait.hp -= data.damage;
+                if (bait.hp <= 0) {
+                    ROOMS[currentRoom].baits = ROOMS[currentRoom].baits.filter(b => b.id !== data.id);
+                }
+            }
+        }
+    });
+
     socket.on('gemPickup', (gemId) => {
         if (currentRoom && ROOMS[currentRoom]) {
             const room = ROOMS[currentRoom];
             room.gems = room.gems.filter(g => g.id !== gemId);
             io.to(currentRoom).emit('gemCollected', { gemId: gemId, playerId: socket.id });
             
-            // Sdílené XP!
             room.xp += 10;
             if (room.xp >= room.nextLevelXp) {
                 room.level++;
                 room.xp -= room.nextLevelXp;
                 room.nextLevelXp = Math.floor(room.nextLevelXp * 1.25);
                 room.paused = true;
-                room.readyCount = 0; // Resetujeme čítač připravených hráčů
+                room.readyCount = 0;
                 io.to(currentRoom).emit('teamLevelUp', { level: room.level });
             }
         }
@@ -123,7 +143,6 @@ io.on('connection', (socket) => {
             room.readyCount++;
             const activePlayers = Object.values(room.players).filter(p => !p.dead).length;
             
-            // Jakmile si všichni živí hráči vyberou upgrade, odpausujeme hru
             if (room.readyCount >= activePlayers) {
                 room.paused = false;
                 io.to(currentRoom).emit('resumeGame');
@@ -142,16 +161,15 @@ io.on('connection', (socket) => {
     });
 });
 
-// Hlavní smyčka serveru (20x za vteřinu)
 setInterval(() => {
     for (const roomId in ROOMS) {
         const room = ROOMS[roomId];
-        if (room.paused || room.isGameOver) continue; // Nepřátelé se nehýbou, pokud mají hráči level up menu
+        if (room.paused || room.isGameOver) continue;
         
         room.time += 1 / 20;
         const playersArr = Object.values(room.players).filter(p => !p.dead);
         
-        // Spawn nepřátel (škáluje se na základě sdíleného levelu)
+        // Spawn nepřátel
         if (playersArr.length > 0 && Math.random() < (1 / (20 * (CONFIG.SPAWN_INTERVAL / 1000)))) {
             const pivot = playersArr[Math.floor(Math.random() * playersArr.length)];
             const a = Math.random() * Math.PI * 2;
@@ -162,33 +180,60 @@ setInterval(() => {
             
             let isBoss = false;
             let hp = CONFIG.ENEMY_BASE_HEALTH * mod;
+            let type = 1;
             
+            // Fialové kostky (type 2) od levelu 3
+            if (room.level >= 3 && Math.random() < 0.1) {
+                type = 2;
+                hp *= 0.5;
+            }
+
             if (room.level >= 20 && (room.time - room.lastBossTime > CONFIG.BOSS_INTERVAL)) {
                 isBoss = true;
                 hp = CONFIG.ENEMY_BASE_HEALTH * 30 * mod;
+                type = 1;
                 room.lastBossTime = room.time;
             }
 
             room.enemies.push({
                 id: Math.random().toString(36).substr(2, 9),
-                x: x, y: y, hp: hp, maxHp: hp, isBoss: isBoss, type: 1
+                x: x, y: y, hp: hp, maxHp: hp, isBoss: isBoss, type: type,
+                lastShot: room.time
             });
         }
 
-        // Pohyb nepřátel k nejbližšímu hráči
+        // Cíle pro nepřátele (hráči + návnady)
+        const targets = [...playersArr, ...room.baits];
+
         room.enemies.forEach(enemy => {
-            if (playersArr.length === 0) return;
-            const target = playersArr.sort((a, b) => dist(enemy.x, enemy.y, a.x, a.y) - dist(enemy.x, enemy.y, b.x, b.y))[0];
+            if (targets.length === 0) return;
+            const target = targets.sort((a, b) => dist(enemy.x, enemy.y, a.x, a.y) - dist(enemy.x, enemy.y, b.x, b.y))[0];
             const angle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
-            const speed = (CONFIG.ENEMY_BASE_SPEED + (Math.floor(room.time / 60) * 0.15)) * (enemy.isBoss ? 0.8 : 1);
+            
+            let speedMult = 1;
+            if (enemy.isBoss) speedMult = 0.8;
+            if (enemy.type === 2) speedMult = 0.5;
+            
+            const speed = (CONFIG.ENEMY_BASE_SPEED + (Math.floor(room.time / 60) * 0.15)) * speedMult;
             enemy.x += Math.cos(angle) * speed;
             enemy.y += Math.sin(angle) * speed;
+
+            // Střelba fialových kostek
+            if (enemy.type === 2 && room.time - enemy.lastShot > 5) {
+                io.to(roomId).emit('enemyShoot', {
+                    x: enemy.x, y: enemy.y,
+                    tx: target.x, ty: target.y,
+                    dmg: 10
+                });
+                enemy.lastShot = room.time;
+            }
         });
 
         io.to(roomId).emit('stateUpdate', {
             players: room.players,
             enemies: room.enemies,
             gems: room.gems,
+            baits: room.baits,
             time: room.time,
             roomInfo: {
                 level: room.level,
