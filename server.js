@@ -25,7 +25,6 @@ io.on('connection', (socket) => {
     console.log('Hráč připojen:', socket.id);
     let currentRoom = null;
 
-    // Funkce pro odeslání seznamu místností hráčům v lobby
     socket.on('requestRooms', () => {
         const activeRooms = [];
         for (const roomId in ROOMS) {
@@ -184,8 +183,11 @@ setInterval(() => {
         room.time += 1 / 20;
         const playersArr = Object.values(room.players).filter(p => !p.dead);
         
-        // Spawn nepřátel
-        if (playersArr.length > 0 && Math.random() < (1 / (20 * (CONFIG.SPAWN_INTERVAL / 1000)))) {
+        // Zrychlování spawnu podle času jako v SOLO módu
+        const currentInterval = Math.max(100, CONFIG.SPAWN_INTERVAL / (1 + room.time / 60));
+        const spawnChance = 1 / (currentInterval / 50); // 50ms je serverový krok
+
+        if (playersArr.length > 0 && Math.random() < spawnChance) {
             const pivot = playersArr[Math.floor(Math.random() * playersArr.length)];
             const a = Math.random() * Math.PI * 2;
             const radius = 700;
@@ -212,7 +214,8 @@ setInterval(() => {
             room.enemies.push({
                 id: Math.random().toString(36).substr(2, 9),
                 x: x, y: y, hp: hp, maxHp: hp, isBoss: isBoss, type: type,
-                lastShot: room.time
+                lastShot: room.time,
+                mod: mod // Uložíme obtížnost pro výpočet rychlosti
             });
         }
 
@@ -227,7 +230,10 @@ setInterval(() => {
             if (enemy.isBoss) speedMult = 0.8;
             if (enemy.type === 2) speedMult = 0.5;
             
-            const speed = (CONFIG.ENEMY_BASE_SPEED + (Math.floor(room.time / 60) * 0.15)) * speedMult;
+            // Zrychlování pohybu v čase jako v SOLO módu
+            const enemyMod = enemy.mod || 1;
+            const speed = (CONFIG.ENEMY_BASE_SPEED + (enemyMod * 0.15)) * speedMult;
+            
             enemy.x += Math.cos(angle) * speed;
             enemy.y += Math.sin(angle) * speed;
 
@@ -235,7 +241,7 @@ setInterval(() => {
                 io.to(roomId).emit('enemyShoot', {
                     x: enemy.x, y: enemy.y,
                     tx: target.x, ty: target.y,
-                    dmg: 10
+                    dmg: 10, speed: CONFIG.PROJECTILE_SPEED * 1.2, size: 8
                 });
                 enemy.lastShot = room.time;
             }
