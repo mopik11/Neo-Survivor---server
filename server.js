@@ -25,6 +25,22 @@ io.on('connection', (socket) => {
     console.log('Hráč připojen:', socket.id);
     let currentRoom = null;
 
+    // Funkce pro odeslání seznamu místností hráčům v lobby
+    socket.on('requestRooms', () => {
+        const activeRooms = [];
+        for (const roomId in ROOMS) {
+            const playersCount = Object.keys(ROOMS[roomId].players).length;
+            if (playersCount > 0) {
+                activeRooms.push({
+                    id: roomId,
+                    players: playersCount,
+                    level: ROOMS[roomId].level
+                });
+            }
+        }
+        socket.emit('roomList', activeRooms);
+    });
+
     socket.on('joinRoom', (roomId) => {
         socket.join(roomId);
         currentRoom = roomId;
@@ -97,7 +113,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Podpora návnady (Bait)
     socket.on('spawnBait', (data) => {
         if (currentRoom && ROOMS[currentRoom]) {
             ROOMS[currentRoom].baits.push({
@@ -182,7 +197,6 @@ setInterval(() => {
             let hp = CONFIG.ENEMY_BASE_HEALTH * mod;
             let type = 1;
             
-            // Fialové kostky (type 2) od levelu 3
             if (room.level >= 3 && Math.random() < 0.1) {
                 type = 2;
                 hp *= 0.5;
@@ -202,7 +216,6 @@ setInterval(() => {
             });
         }
 
-        // Cíle pro nepřátele (hráči + návnady)
         const targets = [...playersArr, ...room.baits];
 
         room.enemies.forEach(enemy => {
@@ -218,7 +231,6 @@ setInterval(() => {
             enemy.x += Math.cos(angle) * speed;
             enemy.y += Math.sin(angle) * speed;
 
-            // Střelba fialových kostek
             if (enemy.type === 2 && room.time - enemy.lastShot > 5) {
                 io.to(roomId).emit('enemyShoot', {
                     x: enemy.x, y: enemy.y,
