@@ -9,6 +9,8 @@ const io = new Server(server, {
 });
 
 const ROOMS = {};
+// Jednoduchá paměť pro Žebříček (jméno -> max level)
+const LEADERBOARD = {};
 
 const CONFIG = {
     ENEMY_BASE_HEALTH: 20,
@@ -21,9 +23,33 @@ function dist(x1, y1, x2, y2) {
     return Math.hypot(x2 - x1, y2 - y1);
 }
 
+function getTopLeaderboard() {
+    return Object.entries(LEADERBOARD)
+        .map(([name, level]) => ({ name, level }))
+        .sort((a, b) => b.level - a.level)
+        .slice(0, 10); // Top 10 hráčů
+}
+
 io.on('connection', (socket) => {
     console.log('Hráč připojen:', socket.id);
     let currentRoom = null;
+
+    // --- LEADERBOARD LOGIKA ---
+    socket.on('requestLeaderboard', () => {
+        socket.emit('leaderboardData', getTopLeaderboard());
+    });
+
+    socket.on('submitScore', (data) => {
+        if (data && data.name && data.level) {
+            // Pokud jméno v žebříčku není, nebo má nový záznam větší level, updatujeme
+            if (!LEADERBOARD[data.name] || data.level > LEADERBOARD[data.name]) {
+                LEADERBOARD[data.name] = data.level;
+            }
+            // Všem pošleme updatnutý žebříček
+            io.emit('leaderboardData', getTopLeaderboard());
+        }
+    });
+    // --------------------------
 
     socket.on('requestRooms', () => {
         const activeRooms = [];
