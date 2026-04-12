@@ -12,7 +12,7 @@ const ROOMS = {};
 
 const CONFIG = {
     ENEMY_BASE_HEALTH: 20,
-    ENEMY_BASE_SPEED: 2.5, // ZRYCHLENO
+    ENEMY_BASE_SPEED: 2.5, 
     SPAWN_INTERVAL: 800,
     BOSS_INTERVAL: 60
 };
@@ -282,7 +282,8 @@ setInterval(() => {
                 io.to(roomId).emit('enemyShoot', {
                     x: enemy.x, y: enemy.y,
                     tx: target.x, ty: target.y,
-                    dmg: 10, speed: CONFIG.PROJECTILE_SPEED * 1.2, size: 8
+                    dmg: 10, speed: CONFIG.PROJECTILE_SPEED * 1.2, size: 8,
+                    type: 'default' // Default pro nepratele
                 });
                 enemy.lastShot = room.time;
             }
