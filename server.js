@@ -22,13 +22,13 @@ function dist(x1, y1, x2, y2) {
 }
 
 io.on('connection', (socket) => {
-    
-    // Získání seznamu místností pro Server Browser
+    console.log('Hráč připojen:', socket.id);
+    let currentRoom = null;
+
     socket.on('requestRooms', () => {
         const activeRooms = [];
         for (const roomId in ROOMS) {
             let activeCount = 0;
-            // Počítáme pouze neodpojené hráče
             for (const p in ROOMS[roomId].players) {
                 if (!ROOMS[roomId].players[p].disconnected) activeCount++;
             }
@@ -43,7 +43,6 @@ io.on('connection', (socket) => {
         socket.emit('roomList', activeRooms);
     });
 
-    // Připojení hráče přes trvalé PlayerID (Místo dočasného Socket ID)
     socket.on('joinRoom', (data) => {
         if(!data || !data.roomId || !data.playerId) return;
         
@@ -54,7 +53,6 @@ io.on('connection', (socket) => {
         socket.roomId = roomId;
         socket.playerId = playerId;
 
-        // Vytvoření nové místnosti, pokud neexistuje
         if (!ROOMS[roomId]) {
             ROOMS[roomId] = {
                 id: roomId,
@@ -73,24 +71,20 @@ io.on('connection', (socket) => {
                 cleanupTimer: null
             };
         } else {
-            // Pokud místnost existovala, ale čekala na smazání, zrušíme časovač
             if (ROOMS[roomId].cleanupTimer) {
                 clearTimeout(ROOMS[roomId].cleanupTimer);
                 ROOMS[roomId].cleanupTimer = null;
             }
         }
 
-        // Pokud hráč v místnosti ještě nebyl, vytvoříme ho na pozici 0,0
         if (!ROOMS[roomId].players[playerId]) {
             ROOMS[roomId].players[playerId] = {
                 id: playerId, x: 0, y: 0, hp: 120, maxHp: 120, dead: false, hat: null, level: 1, disconnected: false
             };
         } else {
-            // Pokud tu hráč byl (pauza/refresh), jen ho označíme jako připojeného
             ROOMS[roomId].players[playerId].disconnected = false;
         }
 
-        // Pošleme zpět aktuální stav hráče a místnosti
         socket.emit('joined', { 
             roomId: roomId, 
             playerState: ROOMS[roomId].players[playerId] 
@@ -192,7 +186,6 @@ io.on('connection', (socket) => {
         if (r && ROOMS[r]) {
             const room = ROOMS[r];
             room.readyCount++;
-            // Čeká se jen na hráče, co nejsou mrtví a nejsou odpojení (v pauze)
             const activePlayers = Object.values(room.players).filter(p => !p.dead && !p.disconnected).length;
             
             if (room.readyCount >= activePlayers) {
@@ -207,16 +200,13 @@ io.on('connection', (socket) => {
         const p = socket.playerId;
         if (r && ROOMS[r] && ROOMS[r].players[p]) {
             console.log(`Hráč ${p} dočasně odpojen (Pauza/Refresh)`);
-            // Pouze označíme jako odpojeného, data necháme žít
             ROOMS[r].players[p].disconnected = true;
             
-            // Zkontrolujeme, jestli v místnosti ještě někdo hraje
             let anyActive = false;
             for (const key in ROOMS[r].players) {
                 if (!ROOMS[r].players[key].disconnected) anyActive = true;
             }
             
-            // Pokud jsou všichni offline, po 10 minutách místnost smažeme z paměti
             if (!anyActive) {
                 ROOMS[r].cleanupTimer = setTimeout(() => {
                     delete ROOMS[r];
@@ -234,7 +224,6 @@ setInterval(() => {
         
         room.time += 1 / 20;
         
-        // Nepřátele zajímají jen živí hráči, co mají aktuálně zapnutou hru (nejsou v pauze)
         const playersArr = Object.values(room.players).filter(p => !p.dead && !p.disconnected);
         
         const currentInterval = Math.max(100, CONFIG.SPAWN_INTERVAL / (1 + room.time / 60));
@@ -275,7 +264,7 @@ setInterval(() => {
         const targets = [...playersArr, ...room.baits];
 
         room.enemies.forEach(enemy => {
-            if (targets.length === 0) return; // Zastaví nepřátele, když dají všichni pauzu
+            if (targets.length === 0) return; 
             const target = targets.sort((a, b) => dist(enemy.x, enemy.y, a.x, a.y) - dist(enemy.x, enemy.y, b.x, b.y))[0];
             const angle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
             
