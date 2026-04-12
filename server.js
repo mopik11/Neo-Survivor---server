@@ -22,17 +22,20 @@ function dist(x1, y1, x2, y2) {
 }
 
 io.on('connection', (socket) => {
-    console.log('Hráč připojen:', socket.id);
-    let currentRoom = null;
-
+    
+    // Získání seznamu místností pro Server Browser
     socket.on('requestRooms', () => {
         const activeRooms = [];
         for (const roomId in ROOMS) {
-            const playersCount = Object.keys(ROOMS[roomId].players).length;
-            if (playersCount > 0) {
+            let activeCount = 0;
+            // Počítáme pouze neodpojené hráče
+            for (const p in ROOMS[roomId].players) {
+                if (!ROOMS[roomId].players[p].disconnected) activeCount++;
+            }
+            if (activeCount > 0) {
                 activeRooms.push({
                     id: roomId,
-                    players: playersCount,
+                    players: activeCount,
                     level: ROOMS[roomId].level
                 });
             }
@@ -40,10 +43,18 @@ io.on('connection', (socket) => {
         socket.emit('roomList', activeRooms);
     });
 
-    socket.on('joinRoom', (roomId) => {
+    // Připojení hráče přes trvalé PlayerID (Místo dočasného Socket ID)
+    socket.on('joinRoom', (data) => {
+        if(!data || !data.roomId || !data.playerId) return;
+        
+        const roomId = data.roomId;
+        const playerId = data.playerId;
+        
         socket.join(roomId);
-        currentRoom = roomId;
+        socket.roomId = roomId;
+        socket.playerId = playerId;
 
+        // Vytvoření nové místnosti, pokud neexistuje
         if (!ROOMS[roomId]) {
             ROOMS[roomId] = {
                 id: roomId,
@@ -58,63 +69,86 @@ io.on('connection', (socket) => {
                 nextLevelXp: 100,
                 paused: false,
                 readyCount: 0,
-                isGameOver: false
+                isGameOver: false,
+                cleanupTimer: null
             };
+        } else {
+            // Pokud místnost existovala, ale čekala na smazání, zrušíme časovač
+            if (ROOMS[roomId].cleanupTimer) {
+                clearTimeout(ROOMS[roomId].cleanupTimer);
+                ROOMS[roomId].cleanupTimer = null;
+            }
         }
 
-        ROOMS[roomId].players[socket.id] = {
-            id: socket.id, x: 0, y: 0, hp: 120, maxHp: 120, dead: false, hat: null, level: 1
-        };
+        // Pokud hráč v místnosti ještě nebyl, vytvoříme ho na pozici 0,0
+        if (!ROOMS[roomId].players[playerId]) {
+            ROOMS[roomId].players[playerId] = {
+                id: playerId, x: 0, y: 0, hp: 120, maxHp: 120, dead: false, hat: null, level: 1, disconnected: false
+            };
+        } else {
+            // Pokud tu hráč byl (pauza/refresh), jen ho označíme jako připojeného
+            ROOMS[roomId].players[playerId].disconnected = false;
+        }
 
-        socket.emit('joined', roomId);
+        // Pošleme zpět aktuální stav hráče a místnosti
+        socket.emit('joined', { 
+            roomId: roomId, 
+            playerState: ROOMS[roomId].players[playerId] 
+        });
+        
+        console.log(`Hráč ${playerId} se připojil do ${roomId}`);
     });
 
     socket.on('playerUpdate', (data) => {
-        if (currentRoom && ROOMS[currentRoom] && ROOMS[currentRoom].players[socket.id]) {
-            Object.assign(ROOMS[currentRoom].players[socket.id], data);
+        const r = socket.roomId;
+        const p = socket.playerId;
+        if (r && ROOMS[r] && ROOMS[r].players[p]) {
+            Object.assign(ROOMS[r].players[p], data);
             
-            if (data.dead && !ROOMS[currentRoom].isGameOver) {
-                ROOMS[currentRoom].isGameOver = true;
-                io.to(currentRoom).emit('teamGameOver');
+            if (data.dead && !ROOMS[r].isGameOver) {
+                ROOMS[r].isGameOver = true;
+                io.to(r).emit('teamGameOver');
                 
-                ROOMS[currentRoom].level = 1;
-                ROOMS[currentRoom].xp = 0;
-                ROOMS[currentRoom].nextLevelXp = 100;
-                ROOMS[currentRoom].enemies = [];
-                ROOMS[currentRoom].gems = [];
-                ROOMS[currentRoom].baits = [];
-                ROOMS[currentRoom].time = 0;
-                ROOMS[currentRoom].paused = false;
+                ROOMS[r].level = 1;
+                ROOMS[r].xp = 0;
+                ROOMS[r].nextLevelXp = 100;
+                ROOMS[r].enemies = [];
+                ROOMS[r].gems = [];
+                ROOMS[r].baits = [];
+                ROOMS[r].time = 0;
+                ROOMS[r].paused = false;
                 
                 setTimeout(() => {
-                    if (ROOMS[currentRoom]) ROOMS[currentRoom].isGameOver = false;
+                    if (ROOMS[r]) ROOMS[r].isGameOver = false;
                 }, 3000);
             }
         }
     });
 
     socket.on('shoot', (projData) => {
-        if (currentRoom) {
-            socket.to(currentRoom).emit('enemyShoot', projData);
+        if (socket.roomId) {
+            socket.to(socket.roomId).emit('enemyShoot', projData);
         }
     });
 
     socket.on('enemyHit', (data) => {
-        if (currentRoom && ROOMS[currentRoom]) {
-            const enemy = ROOMS[currentRoom].enemies.find(e => e.id === data.id);
+        const r = socket.roomId;
+        if (r && ROOMS[r]) {
+            const enemy = ROOMS[r].enemies.find(e => e.id === data.id);
             if (enemy) {
                 enemy.hp -= data.damage;
                 if (enemy.hp <= 0) {
-                    ROOMS[currentRoom].enemies = ROOMS[currentRoom].enemies.filter(e => e.id !== data.id);
-                    ROOMS[currentRoom].gems.push({ id: Math.random().toString(36).substr(2, 9), x: enemy.x, y: enemy.y });
+                    ROOMS[r].enemies = ROOMS[r].enemies.filter(e => e.id !== data.id);
+                    ROOMS[r].gems.push({ id: Math.random().toString(36).substr(2, 9), x: enemy.x, y: enemy.y });
                 }
             }
         }
     });
 
     socket.on('spawnBait', (data) => {
-        if (currentRoom && ROOMS[currentRoom]) {
-            ROOMS[currentRoom].baits.push({
+        const r = socket.roomId;
+        if (r && ROOMS[r]) {
+            ROOMS[r].baits.push({
                 id: Math.random().toString(36).substr(2, 9),
                 x: data.x, y: data.y, hp: data.hp, maxHp: data.hp
             });
@@ -122,22 +156,24 @@ io.on('connection', (socket) => {
     });
 
     socket.on('baitHit', (data) => {
-        if (currentRoom && ROOMS[currentRoom]) {
-            const bait = ROOMS[currentRoom].baits.find(b => b.id === data.id);
+        const r = socket.roomId;
+        if (r && ROOMS[r]) {
+            const bait = ROOMS[r].baits.find(b => b.id === data.id);
             if (bait) {
                 bait.hp -= data.damage;
                 if (bait.hp <= 0) {
-                    ROOMS[currentRoom].baits = ROOMS[currentRoom].baits.filter(b => b.id !== data.id);
+                    ROOMS[r].baits = ROOMS[r].baits.filter(b => b.id !== data.id);
                 }
             }
         }
     });
 
     socket.on('gemPickup', (gemId) => {
-        if (currentRoom && ROOMS[currentRoom]) {
-            const room = ROOMS[currentRoom];
+        const r = socket.roomId;
+        if (r && ROOMS[r]) {
+            const room = ROOMS[r];
             room.gems = room.gems.filter(g => g.id !== gemId);
-            io.to(currentRoom).emit('gemCollected', { gemId: gemId, playerId: socket.id });
+            io.to(r).emit('gemCollected', { gemId: gemId, playerId: socket.playerId });
             
             room.xp += 10;
             if (room.xp >= room.nextLevelXp) {
@@ -146,30 +182,46 @@ io.on('connection', (socket) => {
                 room.nextLevelXp = Math.floor(room.nextLevelXp * 1.25);
                 room.paused = true;
                 room.readyCount = 0;
-                io.to(currentRoom).emit('teamLevelUp', { level: room.level });
+                io.to(r).emit('teamLevelUp', { level: room.level });
             }
         }
     });
     
     socket.on('upgradePicked', () => {
-        if (currentRoom && ROOMS[currentRoom]) {
-            const room = ROOMS[currentRoom];
+        const r = socket.roomId;
+        if (r && ROOMS[r]) {
+            const room = ROOMS[r];
             room.readyCount++;
-            const activePlayers = Object.values(room.players).filter(p => !p.dead).length;
+            // Čeká se jen na hráče, co nejsou mrtví a nejsou odpojení (v pauze)
+            const activePlayers = Object.values(room.players).filter(p => !p.dead && !p.disconnected).length;
             
             if (room.readyCount >= activePlayers) {
                 room.paused = false;
-                io.to(currentRoom).emit('resumeGame');
+                io.to(r).emit('resumeGame');
             }
         }
     });
 
     socket.on('disconnect', () => {
-        console.log('Hráč odpojen:', socket.id);
-        if (currentRoom && ROOMS[currentRoom]) {
-            delete ROOMS[currentRoom].players[socket.id];
-            if (Object.keys(ROOMS[currentRoom].players).length === 0) {
-                delete ROOMS[currentRoom];
+        const r = socket.roomId;
+        const p = socket.playerId;
+        if (r && ROOMS[r] && ROOMS[r].players[p]) {
+            console.log(`Hráč ${p} dočasně odpojen (Pauza/Refresh)`);
+            // Pouze označíme jako odpojeného, data necháme žít
+            ROOMS[r].players[p].disconnected = true;
+            
+            // Zkontrolujeme, jestli v místnosti ještě někdo hraje
+            let anyActive = false;
+            for (const key in ROOMS[r].players) {
+                if (!ROOMS[r].players[key].disconnected) anyActive = true;
+            }
+            
+            // Pokud jsou všichni offline, po 10 minutách místnost smažeme z paměti
+            if (!anyActive) {
+                ROOMS[r].cleanupTimer = setTimeout(() => {
+                    delete ROOMS[r];
+                    console.log(`Místnost ${r} byla smazána pro neaktivitu.`);
+                }, 10 * 60 * 1000); 
             }
         }
     });
@@ -181,7 +233,9 @@ setInterval(() => {
         if (room.paused || room.isGameOver) continue;
         
         room.time += 1 / 20;
-        const playersArr = Object.values(room.players).filter(p => !p.dead);
+        
+        // Nepřátele zajímají jen živí hráči, co mají aktuálně zapnutou hru (nejsou v pauze)
+        const playersArr = Object.values(room.players).filter(p => !p.dead && !p.disconnected);
         
         const currentInterval = Math.max(100, CONFIG.SPAWN_INTERVAL / (1 + room.time / 60));
         const spawnChance = 1 / (currentInterval / 50);
@@ -221,7 +275,7 @@ setInterval(() => {
         const targets = [...playersArr, ...room.baits];
 
         room.enemies.forEach(enemy => {
-            if (targets.length === 0) return;
+            if (targets.length === 0) return; // Zastaví nepřátele, když dají všichni pauzu
             const target = targets.sort((a, b) => dist(enemy.x, enemy.y, a.x, a.y) - dist(enemy.x, enemy.y, b.x, b.y))[0];
             const angle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
             
