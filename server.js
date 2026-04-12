@@ -183,9 +183,8 @@ setInterval(() => {
         room.time += 1 / 20;
         const playersArr = Object.values(room.players).filter(p => !p.dead);
         
-        // Zrychlování spawnu podle času jako v SOLO módu
         const currentInterval = Math.max(100, CONFIG.SPAWN_INTERVAL / (1 + room.time / 60));
-        const spawnChance = 1 / (currentInterval / 50); // 50ms je serverový krok
+        const spawnChance = 1 / (currentInterval / 50);
 
         if (playersArr.length > 0 && Math.random() < spawnChance) {
             const pivot = playersArr[Math.floor(Math.random() * playersArr.length)];
@@ -215,7 +214,7 @@ setInterval(() => {
                 id: Math.random().toString(36).substr(2, 9),
                 x: x, y: y, hp: hp, maxHp: hp, isBoss: isBoss, type: type,
                 lastShot: room.time,
-                mod: mod // Uložíme obtížnost pro výpočet rychlosti
+                mod: mod 
             });
         }
 
@@ -230,7 +229,6 @@ setInterval(() => {
             if (enemy.isBoss) speedMult = 0.8;
             if (enemy.type === 2) speedMult = 0.5;
             
-            // Zrychlování pohybu v čase jako v SOLO módu
             const enemyMod = enemy.mod || 1;
             const speed = (CONFIG.ENEMY_BASE_SPEED + (enemyMod * 0.15)) * speedMult;
             
