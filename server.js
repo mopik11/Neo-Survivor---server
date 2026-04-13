@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const sqlite3 = require('sqlite3').verbose(); // Přidána databáze!
 
 const app = express();
 const server = http.createServer(app);
@@ -8,15 +9,28 @@ const io = new Server(server, {
     cors: { origin: "*" }
 });
 
-const ROOMS = {};
-const LEADERBOARD = {};
+// --- INICIALIZACE DATABÁZE ---
+const db = new sqlite3.Database('./neo_survivor.db', (err) => {
+    if (err) {
+        console.error("Chyba při připojování k databázi:", err.message);
+    } else {
+        console.log("Připojeno k SQLite databázi.");
+        // Vytvoření tabulky účtů, pokud neexistuje
+        db.run(`CREATE TABLE IF NOT EXISTS accounts (
+            username TEXT PRIMARY KEY,
+            password TEXT,
+            meta TEXT,
+            max_level INTEGER
+        )`);
+    }
+});
+// ------------------------------
 
-// PAMĚŤ ÚČTŮ (Pro prototyp v paměti RAM)
-const ACCOUNTS = {};
+const ROOMS = {};
 
 const CONFIG = {
     ENEMY_BASE_HEALTH: 20,
-    ENEMY_BASE_SPEED: 4.5, // ZRYCHLENO NA 4.5!
+    ENEMY_BASE_SPEED: 4.5, 
     SPAWN_INTERVAL: 800,
     BOSS_INTERVAL: 60
 };
@@ -25,64 +39,92 @@ function dist(x1, y1, x2, y2) {
     return Math.hypot(x2 - x1, y2 - y1);
 }
 
-function getTopLeaderboard() {
-    return Object.entries(LEADERBOARD)
-        .map(([name, level]) => ({ name, level }))
-        .sort((a, b) => b.level - a.level)
-        .slice(0, 10); 
+function broadcastLeaderboard() {
+    db.all(`SELECT username as name, max_level as level FROM accounts ORDER BY max_level DESC LIMIT 10`, [], (err, rows) => {
+        if (!err && rows) {
+            io.emit('leaderboardData', rows);
+        }
+    });
 }
 
 io.on('connection', (socket) => {
     console.log('Hráč připojen:', socket.id);
-    let currentRoom = null;
 
-    // --- SYSTÉM ÚČTŮ ---
+    // --- SYSTÉM ÚČTŮ (NYNÍ V DATABÁZI) ---
     socket.on('register', (data) => {
         const { user, pass } = data;
         if (!user || user.length < 3 || !pass || pass.length < 1) {
             return socket.emit('registerResponse', { success: false, msg: 'Jméno min. 3 znaky a heslo nesmí být prázdné.' });
         }
-        if (ACCOUNTS[user]) {
-            return socket.emit('registerResponse', { success: false, msg: 'Toto jméno už někdo používá.' });
-        }
         
-        ACCOUNTS[user] = {
-            pass: pass,
-            meta: {
+        db.get(`SELECT username FROM accounts WHERE username = ?`, [user], (err, row) => {
+            if (row) {
+                return socket.emit('registerResponse', { success: false, msg: 'Toto jméno už někdo používá.' });
+            }
+            
+            const defaultMeta = {
                 playerName: user,
                 maxLevel: 1,
                 currency: 0,
                 upgrades: { hp: 0, speed: 0, luck: 0, hat: null },
                 ships: { 1: true, 2: false, 3: false },
                 selectedShip: 1
-            }
-        };
-        socket.emit('registerResponse', { success: true, meta: ACCOUNTS[user].meta });
+            };
+            
+            db.run(`INSERT INTO accounts (username, password, meta, max_level) VALUES (?, ?, ?, ?)`, 
+                [user, pass, JSON.stringify(defaultMeta), 1], 
+                (err) => {
+                    if (err) {
+                        return socket.emit('registerResponse', { success: false, msg: 'Chyba při zápisu do databáze.' });
+                    }
+                    socket.emit('registerResponse', { success: true, meta: defaultMeta });
+                    broadcastLeaderboard();
+            });
+        });
     });
 
     socket.on('login', (data) => {
         const { user, pass } = data;
-        if (ACCOUNTS[user] && ACCOUNTS[user].pass === pass) {
-            socket.emit('loginResponse', { success: true, meta: ACCOUNTS[user].meta });
-        } else {
-            socket.emit('loginResponse', { success: false, msg: 'Špatné jméno nebo heslo.' });
-        }
+        db.get(`SELECT meta FROM accounts WHERE username = ? AND password = ?`, [user, pass], (err, row) => {
+            if (row) {
+                socket.emit('loginResponse', { success: true, meta: JSON.parse(row.meta) });
+            } else {
+                socket.emit('loginResponse', { success: false, msg: 'Špatné jméno nebo heslo.' });
+            }
+        });
     });
 
     socket.on('syncAccount', (data) => {
         const { user, pass, meta } = data;
-        if (ACCOUNTS[user] && ACCOUNTS[user].pass === pass) {
-            ACCOUNTS[user].meta = meta;
-            if (!LEADERBOARD[user] || meta.maxLevel > LEADERBOARD[user]) {
-                LEADERBOARD[user] = meta.maxLevel;
-                io.emit('leaderboardData', getTopLeaderboard());
+        db.get(`SELECT password, max_level FROM accounts WHERE username = ?`, [user], (err, row) => {
+            if (row && row.password === pass) {
+                const newMaxLevel = Math.max(meta.maxLevel || 1, row.max_level || 1);
+                db.run(`UPDATE accounts SET meta = ?, max_level = ? WHERE username = ?`, 
+                    [JSON.stringify(meta), newMaxLevel, user], 
+                    (err) => {
+                        if (!err && newMaxLevel > row.max_level) {
+                            broadcastLeaderboard();
+                        }
+                });
             }
-        }
+        });
     });
     // -------------------
 
     socket.on('requestLeaderboard', () => {
-        socket.emit('leaderboardData', getTopLeaderboard());
+        broadcastLeaderboard();
+    });
+
+    socket.on('submitScore', (data) => {
+        if (data && data.name && data.level) {
+            db.get(`SELECT max_level FROM accounts WHERE username = ?`, [data.name], (err, row) => {
+                if (row && data.level > row.max_level) {
+                    db.run(`UPDATE accounts SET max_level = ? WHERE username = ?`, [data.level, data.name], () => {
+                        broadcastLeaderboard();
+                    });
+                }
+            });
+        }
     });
 
     socket.on('requestRooms', () => {
@@ -259,6 +301,7 @@ io.on('connection', (socket) => {
         const r = socket.roomId;
         const p = socket.playerId;
         if (r && ROOMS[r] && ROOMS[r].players[p]) {
+            console.log(`Hráč ${p} dočasně odpojen`);
             ROOMS[r].players[p].disconnected = true;
             
             let anyActive = false;
