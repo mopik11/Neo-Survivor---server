@@ -11,9 +11,12 @@ const io = new Server(server, {
 const ROOMS = {};
 const LEADERBOARD = {};
 
+// PAMĚŤ ÚČTŮ (Pro prototyp v paměti RAM)
+const ACCOUNTS = {};
+
 const CONFIG = {
     ENEMY_BASE_HEALTH: 20,
-    ENEMY_BASE_SPEED: 4.5, 
+    ENEMY_BASE_SPEED: 4.5, // ZRYCHLENO NA 4.5!
     SPAWN_INTERVAL: 800,
     BOSS_INTERVAL: 60
 };
@@ -33,17 +36,53 @@ io.on('connection', (socket) => {
     console.log('Hráč připojen:', socket.id);
     let currentRoom = null;
 
-    socket.on('requestLeaderboard', () => {
-        socket.emit('leaderboardData', getTopLeaderboard());
+    // --- SYSTÉM ÚČTŮ ---
+    socket.on('register', (data) => {
+        const { user, pass } = data;
+        if (!user || user.length < 3 || !pass || pass.length < 1) {
+            return socket.emit('registerResponse', { success: false, msg: 'Jméno min. 3 znaky a heslo nesmí být prázdné.' });
+        }
+        if (ACCOUNTS[user]) {
+            return socket.emit('registerResponse', { success: false, msg: 'Toto jméno už někdo používá.' });
+        }
+        
+        ACCOUNTS[user] = {
+            pass: pass,
+            meta: {
+                playerName: user,
+                maxLevel: 1,
+                currency: 0,
+                upgrades: { hp: 0, speed: 0, luck: 0, hat: null },
+                ships: { 1: true, 2: false, 3: false },
+                selectedShip: 1
+            }
+        };
+        socket.emit('registerResponse', { success: true, meta: ACCOUNTS[user].meta });
     });
 
-    socket.on('submitScore', (data) => {
-        if (data && data.name && data.level) {
-            if (!LEADERBOARD[data.name] || data.level > LEADERBOARD[data.name]) {
-                LEADERBOARD[data.name] = data.level;
-            }
-            io.emit('leaderboardData', getTopLeaderboard());
+    socket.on('login', (data) => {
+        const { user, pass } = data;
+        if (ACCOUNTS[user] && ACCOUNTS[user].pass === pass) {
+            socket.emit('loginResponse', { success: true, meta: ACCOUNTS[user].meta });
+        } else {
+            socket.emit('loginResponse', { success: false, msg: 'Špatné jméno nebo heslo.' });
         }
+    });
+
+    socket.on('syncAccount', (data) => {
+        const { user, pass, meta } = data;
+        if (ACCOUNTS[user] && ACCOUNTS[user].pass === pass) {
+            ACCOUNTS[user].meta = meta;
+            if (!LEADERBOARD[user] || meta.maxLevel > LEADERBOARD[user]) {
+                LEADERBOARD[user] = meta.maxLevel;
+                io.emit('leaderboardData', getTopLeaderboard());
+            }
+        }
+    });
+    // -------------------
+
+    socket.on('requestLeaderboard', () => {
+        socket.emit('leaderboardData', getTopLeaderboard());
     });
 
     socket.on('requestRooms', () => {
@@ -110,8 +149,6 @@ io.on('connection', (socket) => {
             roomId: roomId, 
             playerState: ROOMS[roomId].players[playerId] 
         });
-        
-        console.log(`Hráč ${playerId} se připojil do ${roomId}`);
     });
 
     socket.on('playerUpdate', (data) => {
@@ -222,7 +259,6 @@ io.on('connection', (socket) => {
         const r = socket.roomId;
         const p = socket.playerId;
         if (r && ROOMS[r] && ROOMS[r].players[p]) {
-            console.log(`Hráč ${p} dočasně odpojen (Pauza/Refresh)`);
             ROOMS[r].players[p].disconnected = true;
             
             let anyActive = false;
@@ -237,10 +273,8 @@ io.on('connection', (socket) => {
             if (!anyActive) {
                 ROOMS[r].cleanupTimer = setTimeout(() => {
                     delete ROOMS[r];
-                    console.log(`Místnost ${r} byla smazána pro neaktivitu.`);
                 }, 10 * 60 * 1000); 
             } else if (ROOMS[r].paused) {
-                // OPRAVA: Pokud je hra pauzlá kvůli level upu a zbylí hráči už mají vybráno, hra se hned pustí!
                 if (ROOMS[r].readyCount >= activePlayersCount && activePlayersCount > 0) {
                     ROOMS[r].paused = false;
                     ROOMS[r].readyCount = 0;
