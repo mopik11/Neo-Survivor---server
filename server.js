@@ -100,7 +100,7 @@ io.on('connection', (socket) => {
 
         if (!ROOMS[roomId].players[playerId]) {
             ROOMS[roomId].players[playerId] = {
-                id: playerId, x: 0, y: 0, hp: 120, maxHp: 120, dead: false, hat: null, level: 1, disconnected: false
+                id: playerId, x: 0, y: 0, hp: 120, maxHp: 120, dead: false, hat: null, level: 1, disconnected: false, name: data.name || "Hráč"
             };
         } else {
             ROOMS[roomId].players[playerId].disconnected = false;
@@ -132,6 +132,7 @@ io.on('connection', (socket) => {
                 ROOMS[r].baits = [];
                 ROOMS[r].time = 0;
                 ROOMS[r].paused = false;
+                ROOMS[r].readyCount = 0;
                 
                 setTimeout(() => {
                     if (ROOMS[r]) ROOMS[r].isGameOver = false;
@@ -211,6 +212,7 @@ io.on('connection', (socket) => {
             
             if (room.readyCount >= activePlayers) {
                 room.paused = false;
+                room.readyCount = 0;
                 io.to(r).emit('resumeGame');
             }
         }
@@ -224,8 +226,12 @@ io.on('connection', (socket) => {
             ROOMS[r].players[p].disconnected = true;
             
             let anyActive = false;
+            let activePlayersCount = 0;
             for (const key in ROOMS[r].players) {
-                if (!ROOMS[r].players[key].disconnected) anyActive = true;
+                if (!ROOMS[r].players[key].disconnected) {
+                    anyActive = true;
+                    if (!ROOMS[r].players[key].dead) activePlayersCount++;
+                }
             }
             
             if (!anyActive) {
@@ -233,6 +239,13 @@ io.on('connection', (socket) => {
                     delete ROOMS[r];
                     console.log(`Místnost ${r} byla smazána pro neaktivitu.`);
                 }, 10 * 60 * 1000); 
+            } else if (ROOMS[r].paused) {
+                // OPRAVA: Pokud je hra pauzlá kvůli level upu a zbylí hráči už mají vybráno, hra se hned pustí!
+                if (ROOMS[r].readyCount >= activePlayersCount && activePlayersCount > 0) {
+                    ROOMS[r].paused = false;
+                    ROOMS[r].readyCount = 0;
+                    io.to(r).emit('resumeGame');
+                }
             }
         }
     });
