@@ -1,7 +1,7 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const sqlite3 = require('sqlite3').verbose(); // Přidána databáze!
+const sqlite3 = require('sqlite3').verbose(); 
 
 const app = express();
 const server = http.createServer(app);
@@ -15,7 +15,6 @@ const db = new sqlite3.Database('./neo_survivor.db', (err) => {
         console.error("Chyba při připojování k databázi:", err.message);
     } else {
         console.log("Připojeno k SQLite databázi.");
-        // Vytvoření tabulky účtů, pokud neexistuje
         db.run(`CREATE TABLE IF NOT EXISTS accounts (
             username TEXT PRIMARY KEY,
             password TEXT,
@@ -50,7 +49,7 @@ function broadcastLeaderboard() {
 io.on('connection', (socket) => {
     console.log('Hráč připojen:', socket.id);
 
-    // --- SYSTÉM ÚČTŮ (NYNÍ V DATABÁZI) ---
+    // --- SYSTÉM ÚČTŮ (V DATABÁZI) ---
     socket.on('register', (data) => {
         const { user, pass } = data;
         if (!user || user.length < 3 || !pass || pass.length < 1) {
@@ -301,7 +300,6 @@ io.on('connection', (socket) => {
         const r = socket.roomId;
         const p = socket.playerId;
         if (r && ROOMS[r] && ROOMS[r].players[p]) {
-            console.log(`Hráč ${p} dočasně odpojen`);
             ROOMS[r].players[p].disconnected = true;
             
             let anyActive = false;
@@ -389,14 +387,27 @@ setInterval(() => {
             enemy.x += Math.cos(angle) * speed;
             enemy.y += Math.sin(angle) * speed;
 
-            if (enemy.type === 2 && room.time - enemy.lastShot > 5) {
-                io.to(roomId).emit('enemyShoot', {
-                    x: enemy.x, y: enemy.y,
-                    tx: target.x, ty: target.y,
-                    dmg: 10, speed: CONFIG.PROJECTILE_SPEED * 1.2, size: 8,
-                    type: 'default' 
-                });
-                enemy.lastShot = room.time;
+            // MULTIPLAYER DYNAMICKÁ RYCHLOST A PŘESNOST PRO NEPŘÍTELE 2
+            if (enemy.type === 2) {
+                let currentLvl = room.level || 1;
+                let shootInterval = Math.max(1.5, 5.0 - (currentLevel * 0.15)); 
+                
+                if (room.time - enemy.lastShot > shootInterval) {
+                    let inaccuracy = Math.max(0, 0.6 - (currentLevel * 0.04)); 
+                    let baseAngle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
+                    let finalAngle = baseAngle + (Math.random() - 0.5) * inaccuracy;
+                    
+                    let tx = enemy.x + Math.cos(finalAngle) * 100;
+                    let ty = enemy.y + Math.sin(finalAngle) * 100;
+
+                    io.to(roomId).emit('enemyShoot', {
+                        x: enemy.x, y: enemy.y,
+                        tx: tx, ty: ty,
+                        dmg: 10, speed: CONFIG.PROJECTILE_SPEED * 1.2, size: 8,
+                        type: 'default' 
+                    });
+                    enemy.lastShot = room.time;
+                }
             }
         });
 
