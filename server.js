@@ -9,7 +9,11 @@ const io = new Server(server, {
     cors: { origin: "*" }
 });
 
-// --- INICIALIZACE DATABÁZE ---
+// TENTO ENDPOINT UDRŽÍ SERVER NAŽIVU PŘES CRON-JOB.ORG
+app.get('/ping', (req, res) => {
+    res.status(200).send('pong');
+});
+
 const db = new sqlite3.Database('./neo_survivor.db', (err) => {
     if (err) {
         console.error("Chyba při připojování k databázi:", err.message);
@@ -23,7 +27,6 @@ const db = new sqlite3.Database('./neo_survivor.db', (err) => {
         )`);
     }
 });
-// ------------------------------
 
 const ROOMS = {};
 
@@ -49,7 +52,6 @@ function broadcastLeaderboard() {
 io.on('connection', (socket) => {
     console.log('Hráč připojen:', socket.id);
 
-    // --- SYSTÉM ÚČTŮ (V DATABÁZI) ---
     socket.on('register', (data) => {
         const { user, pass } = data;
         if (!user || user.length < 3 || !pass || pass.length < 1) {
@@ -67,7 +69,9 @@ io.on('connection', (socket) => {
                 currency: 0,
                 upgrades: { hp: 0, speed: 0, luck: 0, hat: null },
                 ships: { 1: true, 2: false, 3: false },
-                selectedShip: 1
+                selectedShip: 1,
+                abilities: { 1: true, 2: false, 3: false },
+                selectedAbility: 1
             };
             
             db.run(`INSERT INTO accounts (username, password, meta, max_level) VALUES (?, ?, ?, ?)`, 
@@ -86,7 +90,10 @@ io.on('connection', (socket) => {
         const { user, pass } = data;
         db.get(`SELECT meta FROM accounts WHERE username = ? AND password = ?`, [user, pass], (err, row) => {
             if (row) {
-                socket.emit('loginResponse', { success: true, meta: JSON.parse(row.meta) });
+                const parsedMeta = JSON.parse(row.meta);
+                if (!parsedMeta.abilities) parsedMeta.abilities = { 1: true, 2: false, 3: false };
+                if (!parsedMeta.selectedAbility) parsedMeta.selectedAbility = 1;
+                socket.emit('loginResponse', { success: true, meta: parsedMeta });
             } else {
                 socket.emit('loginResponse', { success: false, msg: 'Špatné jméno nebo heslo.' });
             }
@@ -108,7 +115,6 @@ io.on('connection', (socket) => {
             }
         });
     });
-    // -------------------
 
     socket.on('requestLeaderboard', () => {
         broadcastLeaderboard();
@@ -169,7 +175,8 @@ io.on('connection', (socket) => {
                 paused: false,
                 readyCount: 0,
                 isGameOver: false,
-                cleanupTimer: null
+                cleanupTimer: null,
+                frozenUntil: 0 // Logika pro zamrznutí času
             };
         } else {
             if (ROOMS[roomId].cleanupTimer) {
@@ -211,6 +218,7 @@ io.on('connection', (socket) => {
                 ROOMS[r].time = 0;
                 ROOMS[r].paused = false;
                 ROOMS[r].readyCount = 0;
+                ROOMS[r].frozenUntil = 0;
                 
                 setTimeout(() => {
                     if (ROOMS[r]) ROOMS[r].isGameOver = false;
@@ -222,6 +230,23 @@ io.on('connection', (socket) => {
     socket.on('shoot', (projData) => {
         if (socket.roomId) {
             socket.to(socket.roomId).emit('enemyShoot', projData);
+        }
+    });
+
+    // PŘIJETÍ SCHOPNOSTÍ OD HRÁČE
+    socket.on('useAbility', (data) => {
+        const r = socket.roomId;
+        if (r && ROOMS[r]) {
+            if (data.type === 2) {
+                // Zastavení času
+                ROOMS[r].frozenUntil = Date.now() + 5000;
+            } else if (data.type === 3 && data.enemyIds) {
+                // Posednutí ufounů
+                data.enemyIds.forEach(id => {
+                    const e = ROOMS[r].enemies.find(en => en.id === id);
+                    if (e && !e.isBoss) e.possessed = true;
+                });
+            }
         }
     });
 
@@ -327,6 +352,7 @@ io.on('connection', (socket) => {
 });
 
 setInterval(() => {
+    const now = Date.now();
     for (const roomId in ROOMS) {
         const room = ROOMS[roomId];
         if (room.paused || room.isGameOver) continue;
@@ -366,47 +392,88 @@ setInterval(() => {
                 id: Math.random().toString(36).substr(2, 9),
                 x: x, y: y, hp: hp, maxHp: hp, isBoss: isBoss, type: type,
                 lastShot: room.time,
-                mod: mod 
+                mod: mod,
+                possessed: false
             });
         }
 
-        const targets = [...playersArr, ...room.baits];
+        // ZASTAVENÍ ČASU - Pokud je aktivní, nepřátelé nic nedělají
+        if (now < room.frozenUntil) {
+            io.to(roomId).emit('stateUpdate', {
+                players: room.players,
+                enemies: room.enemies,
+                gems: room.gems,
+                baits: room.baits,
+                time: room.time,
+                roomInfo: { level: room.level, xp: room.xp, nextLevelXp: room.nextLevelXp },
+                frozen: true
+            });
+            continue; 
+        }
+
+        const possessedEnemies = room.enemies.filter(e => e.possessed);
+        const normalEnemies = room.enemies.filter(e => !e.possessed);
+        const targetsForNormal = [...playersArr, ...room.baits, ...possessedEnemies];
 
         room.enemies.forEach(enemy => {
-            if (targets.length === 0) return; 
-            const target = targets.sort((a, b) => dist(enemy.x, enemy.y, a.x, a.y) - dist(enemy.x, enemy.y, b.x, b.y))[0];
-            const angle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
-            
-            let speedMult = 1;
-            if (enemy.isBoss) speedMult = 0.8;
-            if (enemy.type === 2) speedMult = 0.5;
-            
-            const enemyMod = enemy.mod || 1;
-            const speed = (CONFIG.ENEMY_BASE_SPEED + (enemyMod * 0.15)) * speedMult;
-            
-            enemy.x += Math.cos(angle) * speed;
-            enemy.y += Math.sin(angle) * speed;
-
-            // MULTIPLAYER DYNAMICKÁ RYCHLOST A PŘESNOST PRO NEPŘÍTELE 2
-            if (enemy.type === 2) {
-                let currentLvl = room.level || 1;
-                let shootInterval = Math.max(1.5, 5.0 - (currentLevel * 0.15)); 
-                
-                if (room.time - enemy.lastShot > shootInterval) {
-                    let inaccuracy = Math.max(0, 0.6 - (currentLevel * 0.04)); 
-                    let baseAngle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
-                    let finalAngle = baseAngle + (Math.random() - 0.5) * inaccuracy;
+            if (enemy.possessed) {
+                // POSEDNUTÝ UFOUN ÚTOČÍ NA NORMÁLNÍ UFOUNY
+                if (normalEnemies.length > 0) {
+                    const target = normalEnemies.sort((a, b) => dist(enemy.x, enemy.y, a.x, a.y) - dist(enemy.x, enemy.y, b.x, b.y))[0];
+                    const angle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
+                    const speed = (CONFIG.ENEMY_BASE_SPEED + ((enemy.mod || 1) * 0.15)) * 1.5; // Zrychlený pohyb posedlých
                     
-                    let tx = enemy.x + Math.cos(finalAngle) * 100;
-                    let ty = enemy.y + Math.sin(finalAngle) * 100;
+                    enemy.x += Math.cos(angle) * speed;
+                    enemy.y += Math.sin(angle) * speed;
+                    
+                    if (dist(enemy.x, enemy.y, target.x, target.y) < 30) {
+                        target.hp -= 50; 
+                        enemy.hp -= 20; 
+                        if (target.hp <= 0) {
+                            room.enemies = room.enemies.filter(e => e.id !== target.id);
+                            room.gems.push({ id: Math.random().toString(36).substr(2, 9), x: target.x, y: target.y });
+                        }
+                        if (enemy.hp <= 0) {
+                            room.enemies = room.enemies.filter(e => e.id !== enemy.id);
+                        }
+                    }
+                }
+            } else {
+                // NORMÁLNÍ UFOUN
+                if (targetsForNormal.length === 0) return; 
+                
+                let target = targetsForNormal.find(t => t.isBait);
+                if (!target) {
+                    target = targetsForNormal.sort((a, b) => dist(enemy.x, enemy.y, a.x, a.y) - dist(enemy.x, enemy.y, b.x, b.y))[0];
+                }
+                
+                const angle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
+                let speedMult = 1;
+                if (enemy.isBoss) speedMult = 0.8;
+                if (enemy.type === 2) speedMult = 0.5;
+                
+                const enemyMod = enemy.mod || 1;
+                const speed = (CONFIG.ENEMY_BASE_SPEED + (enemyMod * 0.15)) * speedMult;
+                
+                enemy.x += Math.cos(angle) * speed;
+                enemy.y += Math.sin(angle) * speed;
 
-                    io.to(roomId).emit('enemyShoot', {
-                        x: enemy.x, y: enemy.y,
-                        tx: tx, ty: ty,
-                        dmg: 10, speed: CONFIG.PROJECTILE_SPEED * 1.2, size: 8,
-                        type: 'default' 
-                    });
-                    enemy.lastShot = room.time;
+                if (enemy.type === 2) {
+                    let dynamicInterval = Math.max(1500, 5000 - (room.level * 150));
+                    if (now - enemy.lastShot > dynamicInterval) {
+                        let inaccuracy = Math.max(0, 0.6 - (room.level * 0.03));
+                        let baseAngle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
+                        let shootAngle = baseAngle + (Math.random() - 0.5) * inaccuracy;
+                        
+                        let tx = enemy.x + Math.cos(shootAngle) * 100;
+                        let ty = enemy.y + Math.sin(shootAngle) * 100;
+
+                        io.to(roomId).emit('enemyShoot', {
+                            x: enemy.x, y: enemy.y, tx: tx, ty: ty,
+                            dmg: 10, speed: CONFIG.PROJECTILE_SPEED * 1.2, size: 8, type: 'default' 
+                        });
+                        enemy.lastShot = now;
+                    }
                 }
             }
         });
@@ -417,11 +484,8 @@ setInterval(() => {
             gems: room.gems,
             baits: room.baits,
             time: room.time,
-            roomInfo: {
-                level: room.level,
-                xp: room.xp,
-                nextLevelXp: room.nextLevelXp
-            }
+            roomInfo: { level: room.level, xp: room.xp, nextLevelXp: room.nextLevelXp },
+            frozen: false
         });
     }
 }, 50);
