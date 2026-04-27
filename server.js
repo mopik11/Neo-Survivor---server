@@ -31,8 +31,8 @@ const ROOMS = {};
 
 // NASTAVENÍ PRO ADMIN KONZOLI
 let SERVER_ADMIN_PIN = null;
-const ADMIN_USER = "mopik"; // 
-const ADMIN_PASS = "o9~^>!:U{i3Y6,o"; //
+const ADMIN_USER = "mopik"; // <-- ZMĚŇ SI UŽIVATELSKÉ JMÉNO
+const ADMIN_PASS = "o9~^>!:U{i3Y6,o"; // <-- ZMĚŇ SI HESLO
 
 const CONFIG = {
     ENEMY_BASE_HEALTH: 20,
@@ -71,8 +71,8 @@ io.on('connection', (socket) => {
 
     socket.on('verifyAdminPin', (data) => {
         if (data.user === ADMIN_USER && data.pass === ADMIN_PASS && data.pin === SERVER_ADMIN_PIN) {
-            socket.isAdmin = true; // Nastavení session pro tento konkrétní socket
-            SERVER_ADMIN_PIN = null; // Znehodnocení PINu po úspěšném použití
+            socket.isAdmin = true; 
+            SERVER_ADMIN_PIN = null; 
             socket.emit('adminAuthStep', { step: 3 });
         } else {
             socket.emit('adminAuthError', "Špatný nebo expirovaný PIN kód.");
@@ -99,7 +99,20 @@ io.on('connection', (socket) => {
                     socket.emit('adminResponse', { msg: `Úspěch: ${target} dostal ${amount} Doge. (Nyní má ${meta.currency})`, color: "lime" });
                 });
             });
-        } 
+        }
+        else if (cmd === 'level') {
+            const amount = parseInt(args[2]);
+            if (!target || isNaN(amount)) return socket.emit('adminResponse', { msg: "Použití: level <jméno> <číslo_levelu>", color: "yellow" });
+            db.get(`SELECT meta FROM accounts WHERE username = ?`, [target], (err, row) => {
+                if (!row) return socket.emit('adminResponse', { msg: `Hráč ${target} nenalezen.`, color: "red" });
+                let meta = JSON.parse(row.meta);
+                meta.maxLevel = amount;
+                db.run(`UPDATE accounts SET meta = ?, max_level = ? WHERE username = ?`, [JSON.stringify(meta), amount, target], () => {
+                    socket.emit('adminResponse', { msg: `Úspěch: Hráči ${target} byl nastaven Max Level ${amount}.`, color: "lime" });
+                    broadcastLeaderboard();
+                });
+            });
+        }
         else if (cmd === 'stats') {
             if (target) {
                 db.get(`SELECT * FROM accounts WHERE username = ?`, [target], (err, row) => {
@@ -131,7 +144,7 @@ io.on('connection', (socket) => {
             socket.emit('adminResponse', { msg: text, color: "cyan" });
         } 
         else {
-            socket.emit('adminResponse', { msg: "Neznámý příkaz. Dostupné: give, stats, delete, rooms", color: "yellow" });
+            socket.emit('adminResponse', { msg: "Neznámý příkaz. Dostupné: give, level, stats, delete, rooms", color: "yellow" });
         }
     });
 
