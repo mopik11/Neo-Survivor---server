@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const sqlite3 = require('sqlite3').verbose(); 
+const readline = require('readline'); // Přidáno pro admin konzoli
 
 const app = express();
 const server = http.createServer(app);
@@ -490,5 +491,105 @@ setInterval(() => {
     }
 }, 50);
 
+// ==========================================
+// ADMIN KONZOLE (READLINE)
+// ==========================================
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+});
+
+rl.on('line', (input) => {
+    const args = input.trim().split(' ');
+    const command = args[0].toLowerCase();
+
+    if (command === 'help') {
+        console.log("Dostupné admin příkazy:");
+        console.log("  help - zobrazí tuto nápovědu");
+        console.log("  stats [username] - zobrazí statistiky hráče (nebo všech, pokud není zadán)");
+        console.log("  give <username> <amount> - přidá hráči zadaný počet Dogecoinů (měny)");
+        console.log("  setlevel <username> <level> - nastaví maximální úroveň hráče");
+        console.log("  delete <username> - nenávratně smaže účet hráče");
+        console.log("  rooms - zobrazí aktivní místnosti a počty hráčů");
+    } else if (command === 'stats') {
+        const target = args[1];
+        if (target) {
+            db.get(`SELECT * FROM accounts WHERE username = ?`, [target], (err, row) => {
+                if (err) return console.log("Chyba databáze:", err);
+                if (!row) return console.log(`Hráč ${target} nenalezen.`);
+                console.log(`Hráč: ${row.username} | Max Level: ${row.max_level}`);
+                console.log(`Meta data:`, JSON.parse(row.meta));
+            });
+        } else {
+            db.all(`SELECT username, max_level FROM accounts ORDER BY max_level DESC`, [], (err, rows) => {
+                if (err) return console.log("Chyba databáze:", err);
+                console.log(`Zaregistrováno hráčů: ${rows.length}`);
+                rows.forEach(r => console.log(`- ${r.username} (Level ${r.max_level})`));
+            });
+        }
+    } else if (command === 'give') {
+        const target = args[1];
+        const amount = parseInt(args[2]);
+        if (!target || isNaN(amount)) return console.log("Použití: give <username> <amount>");
+        
+        db.get(`SELECT meta FROM accounts WHERE username = ?`, [target], (err, row) => {
+            if (err) return console.log("Chyba databáze:", err);
+            if (!row) return console.log(`Hráč ${target} nenalezen.`);
+            
+            try {
+                let meta = JSON.parse(row.meta);
+                meta.currency = (meta.currency || 0) + amount;
+                db.run(`UPDATE accounts SET meta = ? WHERE username = ?`, [JSON.stringify(meta), target], (err) => {
+                    if (err) console.log("Chyba při updatu:", err);
+                    else console.log(`Úspěšně přidáno ${amount} Dogecoinů hráči ${target}. Nový zůstatek: ${meta.currency}`);
+                });
+            } catch(e) {
+                console.log("Chyba při úpravě meta dat:", e);
+            }
+        });
+    } else if (command === 'setlevel') {
+        const target = args[1];
+        const level = parseInt(args[2]);
+        if (!target || isNaN(level)) return console.log("Použití: setlevel <username> <level>");
+        
+        db.run(`UPDATE accounts SET max_level = ? WHERE username = ?`, [level, target], function(err) {
+            if (err) return console.log("Chyba databáze:", err);
+            if (this.changes > 0) {
+                console.log(`Hráči ${target} byl nastaven level na ${level}.`);
+                broadcastLeaderboard();
+            } else {
+                console.log(`Hráč ${target} nenalezen.`);
+            }
+        });
+    } else if (command === 'delete') {
+        const target = args[1];
+        if (!target) return console.log("Použití: delete <username>");
+        
+        db.run(`DELETE FROM accounts WHERE username = ?`, [target], function(err) {
+            if (err) return console.log("Chyba databáze:", err);
+            if (this.changes > 0) {
+                console.log(`Účet ${target} byl úspěšně smazán.`);
+                broadcastLeaderboard();
+            } else {
+                console.log(`Hráč ${target} nenalezen.`);
+            }
+        });
+    } else if (command === 'rooms') {
+        console.log(`Aktivní místnosti: ${Object.keys(ROOMS).length}`);
+        for (let roomId in ROOMS) {
+            let room = ROOMS[roomId];
+            let playersCount = Object.keys(room.players).length;
+            console.log(`- Místnost ${roomId} | Hráčů: ${playersCount} | Level: ${room.level}`);
+        }
+    } else if (command !== '') {
+        console.log("Neznámý příkaz. Napište 'help' pro seznam příkazů.");
+    }
+});
+
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server bezi na portu ${PORT}`));
+server.listen(PORT, () => {
+    console.log(`=========================================`);
+    console.log(`Server bezi na portu ${PORT}`);
+    console.log(`Admin konzole aktivní. Napište 'help' pro nápovědu.`);
+    console.log(`=========================================`);
+});
