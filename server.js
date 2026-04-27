@@ -31,8 +31,8 @@ const ROOMS = {};
 
 // NASTAVENÍ PRO ADMIN KONZOLI
 let SERVER_ADMIN_PIN = null;
-const ADMIN_USER = "admin"; // <-- ZMĚŇ SI UŽIVATELSKÉ JMÉNO
-const ADMIN_PASS = "moje_tajne_heslo"; // <-- ZMĚŇ SI HESLO
+const ADMIN_USER = "mopik"; // 
+const ADMIN_PASS = "o9~^>!:U{i3Y6,o"; //
 
 const CONFIG = {
     ENEMY_BASE_HEALTH: 20,
