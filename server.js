@@ -29,6 +29,11 @@ const db = new sqlite3.Database('./neo_survivor.db', (err) => {
 
 const ROOMS = {};
 
+// NASTAVENÍ PRO ADMIN KONZOLI
+let SERVER_ADMIN_PIN = null;
+const ADMIN_USER = "admin"; // <-- ZMĚŇ SI UŽIVATELSKÉ JMÉNO
+const ADMIN_PASS = "moje_tajne_heslo"; // <-- ZMĚŇ SI HESLO
+
 const CONFIG = {
     ENEMY_BASE_HEALTH: 20,
     ENEMY_BASE_SPEED: 4.5, 
@@ -175,7 +180,7 @@ io.on('connection', (socket) => {
                 readyCount: 0,
                 isGameOver: false,
                 cleanupTimer: null,
-                frozenUntil: 0 // Logika pro zamrznutí času
+                frozenUntil: 0
             };
         } else {
             if (ROOMS[roomId].cleanupTimer) {
@@ -346,16 +351,33 @@ io.on('connection', (socket) => {
         }
     });
 
-    // --- ADMIN KONZOLE PŘES SOCKET.IO ---
+    // --- ADMIN KONZOLE (2FA OCHRANA) ---
+    socket.on('requestAdminPin', (data) => {
+        if (data.user === ADMIN_USER && data.pass === ADMIN_PASS) {
+            SERVER_ADMIN_PIN = Math.floor(100000 + Math.random() * 900000).toString();
+            console.log(`\n===========================================`);
+            console.log(`🔑 ADMIN PIN KÓD BYL VYGENEROVÁN: ${SERVER_ADMIN_PIN}`);
+            console.log(`Tento PIN zadejte do webové administrace.`);
+            console.log(`===========================================\n`);
+            socket.emit('adminResponse', { msg: "PIN vygenerován a zapsán do serverových logů.", color: "yellow" });
+        } else {
+            socket.emit('adminResponse', { msg: "Špatné jméno nebo heslo pro vyžádání PINu.", color: "red" });
+        }
+    });
+
     socket.on('adminCommand', (data) => {
-        const ADMIN_PASS = "moje_tajne_heslo"; // <-- ZMĚŇ SI HESLO!
-        if (data.pass !== ADMIN_PASS) {
-            return socket.emit('adminResponse', { msg: "CHYBA: Špatné heslo!", color: "red" });
+        if (data.user !== ADMIN_USER || data.pass !== ADMIN_PASS) {
+            return socket.emit('adminResponse', { msg: "CHYBA: Špatné heslo nebo jméno!", color: "red" });
+        }
+        if (!SERVER_ADMIN_PIN || data.pin !== SERVER_ADMIN_PIN) {
+            return socket.emit('adminResponse', { msg: "CHYBA: Špatný nebo expirovaný PIN kód! Vyžádejte si nový.", color: "red" });
         }
 
         const args = data.cmd.trim().split(' ');
         const cmd = args[0].toLowerCase();
         const target = args[1];
+
+        SERVER_ADMIN_PIN = null; 
 
         if (cmd === 'give') {
             const amount = parseInt(args[2]);
