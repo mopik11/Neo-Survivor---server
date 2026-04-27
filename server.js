@@ -566,7 +566,7 @@ setInterval(() => {
                 type = 4; // Zloděj
                 hp *= 1.5;
                 speedMod = 2.2;
-            } else if (room.level >= 8 && rnd < 0.3) {
+            } else if (room.level >= 8 && rnd < 0.27) {
                 type = 5; // Support
                 hp *= 3;
                 speedMod = 0.5;
@@ -722,7 +722,7 @@ setInterval(() => {
                 if (enemy.type === 5) { // Support UFO Heal
                     room.enemies.forEach(e => {
                         if (e.id !== enemy.id && !e.possessed && dist(e.x, e.y, enemy.x, enemy.y) < 250) {
-                            e.hp = Math.min(e.maxHp, e.hp + 0.2);
+                            e.hp = Math.min(e.maxHp, e.hp + 0.5);
                         }
                     });
                 }
