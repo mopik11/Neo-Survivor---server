@@ -592,12 +592,12 @@ setInterval(() => {
             });
             
             // Náhodné generování meteorů (překážek)
-            if (Math.random() < 0.02 && room.obstacles.length < 15) {
+            if (Math.random() < 0.1 && room.obstacles.length < 30) {
                 room.obstacles.push({
                     id: Math.random().toString(36).substr(2, 9),
                     x: pivot.x + (Math.random()-0.5)*1500,
                     y: pivot.y + (Math.random()-0.5)*1500,
-                    radius: 40 + Math.random() * 40
+                    radius: 40 + Math.random() * 60
                 });
             }
         }
@@ -630,8 +630,19 @@ setInterval(() => {
                     const angle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
                     const speed = (CONFIG.ENEMY_BASE_SPEED + ((enemy.mod || 1) * 0.15)) * 1.5; // Zrychlený pohyb posedlých
                     
-                    enemy.x += Math.cos(angle) * speed;
-                    enemy.y += Math.sin(angle) * speed;
+                    let nextX = enemy.x + Math.cos(angle) * speed;
+                    let nextY = enemy.y + Math.sin(angle) * speed;
+                    
+                    room.obstacles.forEach(obs => {
+                        if (dist(nextX, nextY, obs.x, obs.y) < 15 + obs.radius) {
+                            const pushAngle = Math.atan2(nextY - obs.y, nextX - obs.x);
+                            nextX = obs.x + Math.cos(pushAngle) * (15 + obs.radius);
+                            nextY = obs.y + Math.sin(pushAngle) * (15 + obs.radius);
+                        }
+                    });
+
+                    enemy.x = nextX;
+                    enemy.y = nextY;
                     
                     if (dist(enemy.x, enemy.y, target.x, target.y) < 30) {
                         target.hp -= 50; 
@@ -672,8 +683,19 @@ setInterval(() => {
                 const enemyMod = enemy.mod || 1;
                 const speed = (CONFIG.ENEMY_BASE_SPEED + (enemyMod * 0.15)) * speedMult;
                 
-                enemy.x += Math.cos(angle) * speed;
-                enemy.y += Math.sin(angle) * speed;
+                let nextX = enemy.x + Math.cos(angle) * speed;
+                let nextY = enemy.y + Math.sin(angle) * speed;
+
+                room.obstacles.forEach(obs => {
+                    if (dist(nextX, nextY, obs.x, obs.y) < 15 + obs.radius) {
+                        const pushAngle = Math.atan2(nextY - obs.y, nextX - obs.x);
+                        nextX = obs.x + Math.cos(pushAngle) * (15 + obs.radius);
+                        nextY = obs.y + Math.sin(pushAngle) * (15 + obs.radius);
+                    }
+                });
+
+                enemy.x = nextX;
+                enemy.y = nextY;
 
                 if (enemy.type === 4 && target.id && room.gems.find(g => g.id === target.id)) {
                     if (dist(enemy.x, enemy.y, target.x, target.y) < 30) {
