@@ -1,9 +1,7 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const sqlite3 = require('sqlite3').verbose(); 
-const readline = require('readline'); // Přidáno pro admin konzoli
-
+const sqlite3 = require('sqlite3').verbose();
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -234,15 +232,12 @@ io.on('connection', (socket) => {
         }
     });
 
-    // PŘIJETÍ SCHOPNOSTÍ OD HRÁČE
     socket.on('useAbility', (data) => {
         const r = socket.roomId;
         if (r && ROOMS[r]) {
             if (data.type === 2) {
-                // Zastavení času
                 ROOMS[r].frozenUntil = Date.now() + 5000;
             } else if (data.type === 3 && data.enemyIds) {
-                // Posednutí ufounů
                 data.enemyIds.forEach(id => {
                     const e = ROOMS[r].enemies.find(en => en.id === id);
                     if (e && !e.isBoss) e.possessed = true;
@@ -350,246 +345,59 @@ io.on('connection', (socket) => {
             }
         }
     });
-});
 
-setInterval(() => {
-    const now = Date.now();
-    for (const roomId in ROOMS) {
-        const room = ROOMS[roomId];
-        if (room.paused || room.isGameOver) continue;
-        
-        room.time += 1 / 20;
-        
-        const playersArr = Object.values(room.players).filter(p => !p.dead && !p.disconnected);
-        
-        const currentInterval = Math.max(100, CONFIG.SPAWN_INTERVAL / (1 + room.time / 60));
-        const spawnChance = 1 / (currentInterval / 50);
-
-        if (playersArr.length > 0 && Math.random() < spawnChance) {
-            const pivot = playersArr[Math.floor(Math.random() * playersArr.length)];
-            const a = Math.random() * Math.PI * 2;
-            const radius = 700;
-            const x = pivot.x + Math.cos(a) * radius;
-            const y = pivot.y + Math.sin(a) * radius;
-            const mod = Math.floor(room.time / 60) + 1;
-            
-            let isBoss = false;
-            let hp = CONFIG.ENEMY_BASE_HEALTH * mod;
-            let type = 1;
-            
-            if (room.level >= 3 && Math.random() < 0.1) {
-                type = 2;
-                hp *= 0.5;
-            }
-
-            if (room.level >= 20 && (room.time - room.lastBossTime > CONFIG.BOSS_INTERVAL)) {
-                isBoss = true;
-                hp = CONFIG.ENEMY_BASE_HEALTH * 30 * mod;
-                type = 1;
-                room.lastBossTime = room.time;
-            }
-
-            room.enemies.push({
-                id: Math.random().toString(36).substr(2, 9),
-                x: x, y: y, hp: hp, maxHp: hp, isBoss: isBoss, type: type,
-                lastShot: room.time,
-                mod: mod,
-                possessed: false
-            });
+    // --- ADMIN KONZOLE PŘES SOCKET.IO ---
+    socket.on('adminCommand', (data) => {
+        const ADMIN_PASS = "moje_tajne_heslo"; // <-- ZMĚŇ SI HESLO!
+        if (data.pass !== ADMIN_PASS) {
+            return socket.emit('adminResponse', { msg: "CHYBA: Špatné heslo!", color: "red" });
         }
 
-        // ZASTAVENÍ ČASU - Pokud je aktivní, nepřátelé nic nedělají
-        if (now < room.frozenUntil) {
-            io.to(roomId).emit('stateUpdate', {
-                players: room.players,
-                enemies: room.enemies,
-                gems: room.gems,
-                baits: room.baits,
-                time: room.time,
-                roomInfo: { level: room.level, xp: room.xp, nextLevelXp: room.nextLevelXp },
-                frozen: true
-            });
-            continue; 
-        }
-
-        const possessedEnemies = room.enemies.filter(e => e.possessed);
-        const normalEnemies = room.enemies.filter(e => !e.possessed);
-        const targetsForNormal = [...playersArr, ...room.baits, ...possessedEnemies];
-
-        room.enemies.forEach(enemy => {
-            if (enemy.possessed) {
-                // POSEDNUTÝ UFOUN ÚTOČÍ NA NORMÁLNÍ UFOUNY
-                if (normalEnemies.length > 0) {
-                    const target = normalEnemies.sort((a, b) => dist(enemy.x, enemy.y, a.x, a.y) - dist(enemy.x, enemy.y, b.x, b.y))[0];
-                    const angle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
-                    const speed = (CONFIG.ENEMY_BASE_SPEED + ((enemy.mod || 1) * 0.15)) * 1.5; // Zrychlený pohyb posedlých
-                    
-                    enemy.x += Math.cos(angle) * speed;
-                    enemy.y += Math.sin(angle) * speed;
-                    
-                    if (dist(enemy.x, enemy.y, target.x, target.y) < 30) {
-                        target.hp -= 50; 
-                        enemy.hp -= 20; 
-                        if (target.hp <= 0) {
-                            room.enemies = room.enemies.filter(e => e.id !== target.id);
-                            room.gems.push({ id: Math.random().toString(36).substr(2, 9), x: target.x, y: target.y });
-                        }
-                        if (enemy.hp <= 0) {
-                            room.enemies = room.enemies.filter(e => e.id !== enemy.id);
-                        }
-                    }
-                }
-            } else {
-                // NORMÁLNÍ UFOUN
-                if (targetsForNormal.length === 0) return; 
-                
-                let target = targetsForNormal.find(t => t.isBait);
-                if (!target) {
-                    target = targetsForNormal.sort((a, b) => dist(enemy.x, enemy.y, a.x, a.y) - dist(enemy.x, enemy.y, b.x, b.y))[0];
-                }
-                
-                const angle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
-                let speedMult = 1;
-                if (enemy.isBoss) speedMult = 0.8;
-                if (enemy.type === 2) speedMult = 0.5;
-                
-                const enemyMod = enemy.mod || 1;
-                const speed = (CONFIG.ENEMY_BASE_SPEED + (enemyMod * 0.15)) * speedMult;
-                
-                enemy.x += Math.cos(angle) * speed;
-                enemy.y += Math.sin(angle) * speed;
-
-                if (enemy.type === 2) {
-                    let dynamicInterval = Math.max(1500, 5000 - (room.level * 150));
-                    if (now - enemy.lastShot > dynamicInterval) {
-                        let inaccuracy = Math.max(0, 0.6 - (room.level * 0.03));
-                        let baseAngle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
-                        let shootAngle = baseAngle + (Math.random() - 0.5) * inaccuracy;
-                        
-                        let tx = enemy.x + Math.cos(shootAngle) * 100;
-                        let ty = enemy.y + Math.sin(shootAngle) * 100;
-
-                        io.to(roomId).emit('enemyShoot', {
-                            x: enemy.x, y: enemy.y, tx: tx, ty: ty,
-                            dmg: 10, speed: CONFIG.PROJECTILE_SPEED * 1.2, size: 8, type: 'default' 
-                        });
-                        enemy.lastShot = now;
-                    }
-                }
-            }
-        });
-
-        io.to(roomId).emit('stateUpdate', {
-            players: room.players,
-            enemies: room.enemies,
-            gems: room.gems,
-            baits: room.baits,
-            time: room.time,
-            roomInfo: { level: room.level, xp: room.xp, nextLevelXp: room.nextLevelXp },
-            frozen: false
-        });
-    }
-}, 50);
-
-// ==========================================
-// ADMIN KONZOLE (READLINE)
-// ==========================================
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-});
-
-rl.on('line', (input) => {
-    const args = input.trim().split(' ');
-    const command = args[0].toLowerCase();
-
-    if (command === 'help') {
-        console.log("Dostupné admin příkazy:");
-        console.log("  help - zobrazí tuto nápovědu");
-        console.log("  stats [username] - zobrazí statistiky hráče (nebo všech, pokud není zadán)");
-        console.log("  give <username> <amount> - přidá hráči zadaný počet Dogecoinů (měny)");
-        console.log("  setlevel <username> <level> - nastaví maximální úroveň hráče");
-        console.log("  delete <username> - nenávratně smaže účet hráče");
-        console.log("  rooms - zobrazí aktivní místnosti a počty hráčů");
-    } else if (command === 'stats') {
+        const args = data.cmd.trim().split(' ');
+        const cmd = args[0].toLowerCase();
         const target = args[1];
-        if (target) {
-            db.get(`SELECT * FROM accounts WHERE username = ?`, [target], (err, row) => {
-                if (err) return console.log("Chyba databáze:", err);
-                if (!row) return console.log(`Hráč ${target} nenalezen.`);
-                console.log(`Hráč: ${row.username} | Max Level: ${row.max_level}`);
-                console.log(`Meta data:`, JSON.parse(row.meta));
-            });
-        } else {
-            db.all(`SELECT username, max_level FROM accounts ORDER BY max_level DESC`, [], (err, rows) => {
-                if (err) return console.log("Chyba databáze:", err);
-                console.log(`Zaregistrováno hráčů: ${rows.length}`);
-                rows.forEach(r => console.log(`- ${r.username} (Level ${r.max_level})`));
-            });
-        }
-    } else if (command === 'give') {
-        const target = args[1];
-        const amount = parseInt(args[2]);
-        if (!target || isNaN(amount)) return console.log("Použití: give <username> <amount>");
-        
-        db.get(`SELECT meta FROM accounts WHERE username = ?`, [target], (err, row) => {
-            if (err) return console.log("Chyba databáze:", err);
-            if (!row) return console.log(`Hráč ${target} nenalezen.`);
-            
-            try {
+
+        if (cmd === 'give') {
+            const amount = parseInt(args[2]);
+            if (!target || isNaN(amount)) return socket.emit('adminResponse', { msg: "Použití: give <jméno> <počet>", color: "yellow" });
+            db.get(`SELECT meta FROM accounts WHERE username = ?`, [target], (err, row) => {
+                if (!row) return socket.emit('adminResponse', { msg: `Hráč ${target} nenalezen.`, color: "red" });
                 let meta = JSON.parse(row.meta);
                 meta.currency = (meta.currency || 0) + amount;
-                db.run(`UPDATE accounts SET meta = ? WHERE username = ?`, [JSON.stringify(meta), target], (err) => {
-                    if (err) console.log("Chyba při updatu:", err);
-                    else console.log(`Úspěšně přidáno ${amount} Dogecoinů hráči ${target}. Nový zůstatek: ${meta.currency}`);
+                db.run(`UPDATE accounts SET meta = ? WHERE username = ?`, [JSON.stringify(meta), target], () => {
+                    socket.emit('adminResponse', { msg: `Úspěch: ${target} dostal ${amount} Doge. (Nyní má ${meta.currency})`, color: "lime" });
                 });
-            } catch(e) {
-                console.log("Chyba při úpravě meta dat:", e);
-            }
-        });
-    } else if (command === 'setlevel') {
-        const target = args[1];
-        const level = parseInt(args[2]);
-        if (!target || isNaN(level)) return console.log("Použití: setlevel <username> <level>");
-        
-        db.run(`UPDATE accounts SET max_level = ? WHERE username = ?`, [level, target], function(err) {
-            if (err) return console.log("Chyba databáze:", err);
-            if (this.changes > 0) {
-                console.log(`Hráči ${target} byl nastaven level na ${level}.`);
-                broadcastLeaderboard();
+            });
+        } 
+        else if (cmd === 'stats') {
+            if (target) {
+                db.get(`SELECT * FROM accounts WHERE username = ?`, [target], (err, row) => {
+                    if (!row) return socket.emit('adminResponse', { msg: `Hráč ${target} nenalezen.`, color: "red" });
+                    socket.emit('adminResponse', { msg: `Hráč: ${row.username} | Max Lvl: ${row.max_level}\nMeta: ${row.meta}`, color: "cyan" });
+                });
             } else {
-                console.log(`Hráč ${target} nenalezen.`);
+                db.all(`SELECT username, max_level FROM accounts ORDER BY max_level DESC`, [], (err, rows) => {
+                    let text = `Zaregistrováno hráčů: ${rows.length}\n`;
+                    rows.forEach(r => text += `- ${r.username} (Lvl ${r.max_level})\n`);
+                    socket.emit('adminResponse', { msg: text, color: "cyan" });
+                });
             }
-        });
-    } else if (command === 'delete') {
-        const target = args[1];
-        if (!target) return console.log("Použití: delete <username>");
-        
-        db.run(`DELETE FROM accounts WHERE username = ?`, [target], function(err) {
-            if (err) return console.log("Chyba databáze:", err);
-            if (this.changes > 0) {
-                console.log(`Účet ${target} byl úspěšně smazán.`);
+        } 
+        else if (cmd === 'delete') {
+            if (!target) return socket.emit('adminResponse', { msg: "Použití: delete <jméno>", color: "yellow" });
+            db.run(`DELETE FROM accounts WHERE username = ?`, [target], function(err) {
+                if (this.changes > 0) socket.emit('adminResponse', { msg: `Účet ${target} byl smazán.`, color: "lime" });
+                else socket.emit('adminResponse', { msg: `Hráč ${target} nenalezen.`, color: "red" });
                 broadcastLeaderboard();
-            } else {
-                console.log(`Hráč ${target} nenalezen.`);
+            });
+        } 
+        else if (cmd === 'rooms') {
+            let count = Object.keys(ROOMS).length;
+            let text = `Aktivní místnosti: ${count}\n`;
+            for (let id in ROOMS) {
+                text += `- ID: ${id} | Hráčů: ${Object.keys(ROOMS[id].players).length} | Lvl: ${ROOMS[id].level}\n`;
             }
-        });
-    } else if (command === 'rooms') {
-        console.log(`Aktivní místnosti: ${Object.keys(ROOMS).length}`);
-        for (let roomId in ROOMS) {
-            let room = ROOMS[roomId];
-            let playersCount = Object.keys(room.players).length;
-            console.log(`- Místnost ${roomId} | Hráčů: ${playersCount} | Level: ${room.level}`);
-        }
-    } else if (command !== '') {
-        console.log("Neznámý příkaz. Napište 'help' pro seznam příkazů.");
-    }
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`=========================================`);
-    console.log(`Server bezi na portu ${PORT}`);
-    console.log(`Admin konzole aktivní. Napište 'help' pro nápovědu.`);
-    console.log(`=========================================`);
-});
+            socket.emit('adminResponse', { msg: text, color: "cyan" });
+        } 
+        else {
+            socket.emit('adminResponse', { msg: "Neznámý příkaz. Dostupné: give, stats, delete, rooms
