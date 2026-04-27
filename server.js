@@ -459,6 +459,16 @@ io.on('connection', (socket) => {
                     }
                 });
                 room.enemies = room.enemies.filter(e => e.hp > 0);
+                if (room.players[socket.playerId]) {
+                    io.to(r).emit('explosion', { x: room.players[socket.playerId].x, y: room.players[socket.playerId].y, radius: 1000, isNuke: true });
+                }
+            }
+
+            if (gem.isMagnet) {
+                room.gems.forEach(g => {
+                    room.xp += 10;
+                });
+                room.gems = [];
             }
 
             room.xp += 10;
