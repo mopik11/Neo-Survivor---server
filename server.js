@@ -24,6 +24,12 @@ const db = new sqlite3.Database('./neo_survivor.db', (err) => {
             meta TEXT,
             max_level INTEGER
         )`);
+        db.run(`CREATE TABLE IF NOT EXISTS feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT,
+            text TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`);
     }
 });
 
@@ -143,8 +149,23 @@ io.on('connection', (socket) => {
             }
             socket.emit('adminResponse', { msg: text, color: "cyan" });
         } 
+        else if (cmd === 'feedback') {
+            db.all(`SELECT * FROM feedback ORDER BY timestamp DESC`, [], (err, rows) => {
+                if (!rows || rows.length === 0) return socket.emit('adminResponse', { msg: "Žádný feedback nenalezen.", color: "yellow" });
+                let text = `ZPĚTNÁ VAZBA (${rows.length}):\n`;
+                rows.forEach(r => {
+                    text += `[${r.timestamp}] ${r.username}: ${r.text}\n`;
+                });
+                socket.emit('adminResponse', { msg: text, color: "pink" });
+            });
+        }
+        else if (cmd === 'clearfeedback') {
+            db.run(`DELETE FROM feedback`, [], () => {
+                socket.emit('adminResponse', { msg: "Veškerý feedback byl smazán.", color: "lime" });
+            });
+        }
         else {
-            socket.emit('adminResponse', { msg: "Neznámý příkaz. Dostupné: give, level, stats, delete, rooms", color: "yellow" });
+            socket.emit('adminResponse', { msg: "Neznámý příkaz. Dostupné: give, level, stats, delete, rooms, feedback, clearfeedback", color: "yellow" });
         }
     });
 
@@ -226,6 +247,12 @@ io.on('connection', (socket) => {
                     });
                 }
             });
+        }
+    });
+
+    socket.on('sendFeedback', (data) => {
+        if (data && data.text) {
+            db.run(`INSERT INTO feedback (username, text) VALUES (?, ?)`, [data.user || 'Anonym', data.text]);
         }
     });
 
