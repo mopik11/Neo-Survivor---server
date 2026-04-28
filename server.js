@@ -63,7 +63,12 @@ function broadcastServerStats() {
     let playersInRooms = 0;
     for (const id in ROOMS) {
         if (ROOMS[id] && ROOMS[id].players) {
-            playersInRooms += Object.keys(ROOMS[id].players).length;
+            // Počítáme pouze ty, kteří nejsou odpojeni
+            for (const pid in ROOMS[id].players) {
+                if (!ROOMS[id].players[pid].disconnected) {
+                    playersInRooms++;
+                }
+            }
         }
     }
     
@@ -583,6 +588,7 @@ io.on('connection', (socket) => {
                 }
             }
         }
+        broadcastServerStats();
     });
 });
 
