@@ -59,6 +59,13 @@ function broadcastLeaderboard() {
     });
 }
 
+function broadcastServerStats() {
+    io.emit('serverStats', {
+        activePlayers: io.sockets.sockets.size
+    });
+}
+setInterval(broadcastServerStats, 5000);
+
 io.on('connection', (socket) => {
     console.log('Hráč připojen:', socket.id);
 
@@ -599,7 +606,8 @@ setInterval(() => {
                 speedMod = 0.5;
             }
 
-            if (room.level >= 20 && (room.time - room.lastBossTime > CONFIG.BOSS_INTERVAL)) {
+            const hasBoss = room.enemies.some(e => e.isBoss);
+            if (room.level >= 20 && (room.time - room.lastBossTime > CONFIG.BOSS_INTERVAL) && !hasBoss) {
                 isBoss = true;
                 hp = CONFIG.ENEMY_BASE_HEALTH * 30 * mod;
                 type = 1;
