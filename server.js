@@ -68,6 +68,7 @@ setInterval(broadcastServerStats, 5000);
 
 io.on('connection', (socket) => {
     console.log('Hráč připojen:', socket.id);
+    broadcastServerStats();
 
     // --- ADMIN KONZOLE (2FA OCHRANA + RELACE) ---
     socket.on('requestAdminPin', (data) => {
