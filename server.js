@@ -66,11 +66,18 @@ function broadcastServerStats() {
             playersInRooms += Object.keys(ROOMS[id].players).length;
         }
     }
-    // io.engine.clientsCount je stabilnější indikátor celkového počtu socketů
-    const totalOnline = io.engine.clientsCount - 1;
+    
+    // Spočítáme unikátní hráče podle jejich persistentního ID
+    const uniquePlayers = new Set();
+    io.sockets.sockets.forEach(s => {
+        if (s.playerId) uniquePlayers.add(s.playerId);
+    });
+    
+    // Pokud Set prázdný (nikdo ještě neposlal initPlayer), použijeme hrubý odhad socketů
+    const displayCount = uniquePlayers.size > 0 ? uniquePlayers.size : io.engine.clientsCount;
 
     io.emit('serverStats', {
-        activePlayers: totalOnline,
+        activePlayers: displayCount,
         playingNow: playersInRooms
     });
 }
@@ -78,6 +85,12 @@ setInterval(broadcastServerStats, 5000);
 
 io.on('connection', (socket) => {
     console.log('Hráč připojen:', socket.id);
+    
+    socket.on('initPlayer', (data) => {
+        socket.playerId = data.playerId;
+        broadcastServerStats();
+    });
+
     broadcastServerStats();
 
     // --- ADMIN KONZOLE (2FA OCHRANA + RELACE) ---
