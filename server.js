@@ -67,7 +67,7 @@ function broadcastServerStats() {
         }
     }
     // io.engine.clientsCount je stabilnější indikátor celkového počtu socketů
-    const totalOnline = io.engine.clientsCount;
+    const totalOnline = io.engine.clientsCount - 1;
 
     io.emit('serverStats', {
         activePlayers: totalOnline,
