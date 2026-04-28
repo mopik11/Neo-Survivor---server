@@ -60,8 +60,18 @@ function broadcastLeaderboard() {
 }
 
 function broadcastServerStats() {
+    let playersInRooms = 0;
+    for (const id in ROOMS) {
+        if (ROOMS[id] && ROOMS[id].players) {
+            playersInRooms += Object.keys(ROOMS[id].players).length;
+        }
+    }
+    // io.engine.clientsCount je stabilnější indikátor celkového počtu socketů
+    const totalOnline = io.engine.clientsCount;
+
     io.emit('serverStats', {
-        activePlayers: io.sockets.sockets.size
+        activePlayers: totalOnline,
+        playingNow: playersInRooms
     });
 }
 setInterval(broadcastServerStats, 5000);
