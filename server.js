@@ -736,14 +736,26 @@ setInterval(() => {
                 // NORMÁLNÍ UFOUN
                 if (targetsForNormal.length === 0 && enemy.type !== 4) return; 
                 
-                let target = targetsForNormal.find(t => t.isBait);
-                if (!target) {
-                    target = targetsForNormal.sort((a, b) => dist(enemy.x, enemy.y, a.x, a.y) - dist(enemy.x, enemy.y, b.x, b.y))[0];
+                let target = null;
+                let minDist2 = Infinity;
+                
+                // Optimalizované hledání cíle (místo .sort)
+                for (let i = 0; i < targetsForNormal.length; i++) {
+                    const t = targetsForNormal[i];
+                    if (t.isBait) { target = t; break; }
+                    const d2 = (enemy.x - t.x)**2 + (enemy.y - t.y)**2;
+                    if (d2 < minDist2) { minDist2 = d2; target = t; }
                 }
 
                 if (enemy.type === 4) { // Zloděj
-                    let gemTarget = room.gems.sort((a, b) => dist(enemy.x, enemy.y, a.x, a.y) - dist(enemy.x, enemy.y, b.x, b.y))[0];
-                    if (gemTarget) target = gemTarget;
+                    let closestGem = null;
+                    let minGemDist2 = Infinity;
+                    for (let i = 0; i < room.gems.length; i++) {
+                        const g = room.gems[i];
+                        const d2 = (enemy.x - g.x)**2 + (enemy.y - g.y)**2;
+                        if (d2 < minGemDist2) { minGemDist2 = d2; closestGem = g; }
+                    }
+                    if (closestGem) target = closestGem;
                     else target = { x: enemy.x * 2, y: enemy.y * 2 }; // Útěk
                 }
 
