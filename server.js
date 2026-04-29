@@ -634,6 +634,10 @@ setInterval(() => {
                 type = 5; // Support
                 hp *= 3;
                 speedMod = 0.5;
+            } else if (room.level >= 10 && rnd < 0.35) {
+                type = 6; // Skokan
+                hp *= 1.2;
+                speedMod = 1.0;
             }
 
             const hasBoss = room.enemies.some(e => e.isBoss);
@@ -791,7 +795,6 @@ setInterval(() => {
                         }
                     });
                 }
-
                 if (enemy.type === 2) {
                     let dynamicInterval = Math.max(1500, 5000 - (room.level * 150));
                     if (now - enemy.lastShot > dynamicInterval) {
@@ -807,6 +810,34 @@ setInterval(() => {
                             dmg: 10, speed: CONFIG.PROJECTILE_SPEED * 1.2, size: 8, type: 'default' 
                         });
                         enemy.lastShot = now;
+                    }
+                }
+
+                if (enemy.type === 6) { // SKOKAN (Server logic)
+                    if (!enemy.jumpState) enemy.jumpState = 'WALKING';
+                    
+                    if (enemy.jumpState === 'WALKING') {
+                        if (dist(enemy.x, enemy.y, target.x, target.y) < 250) {
+                            enemy.jumpState = 'PREPARING';
+                            enemy.prepTime = now + 1000;
+                            enemy.jumpTarget = { x: target.x, y: target.y };
+                        }
+                    } else if (enemy.jumpState === 'PREPARING') {
+                        if (now > enemy.prepTime) {
+                            enemy.jumpState = 'JUMPING';
+                            enemy.jumpStart = { x: enemy.x, y: enemy.y };
+                            enemy.jumpProgress = 0;
+                        }
+                        // Stojí a míří (nedělat nic v x,y)
+                    } else if (enemy.jumpState === 'JUMPING') {
+                        enemy.jumpProgress += 0.04; 
+                        enemy.x = enemy.jumpStart.x + (enemy.jumpTarget.x - enemy.jumpStart.x) * enemy.jumpProgress;
+                        enemy.y = enemy.jumpStart.y + (enemy.jumpTarget.y - enemy.jumpStart.y) * enemy.jumpProgress;
+                        
+                        if (enemy.jumpProgress >= 1) {
+                            enemy.jumpState = 'WALKING';
+                            playersArr.forEach(p => { if (dist(enemy.x, enemy.y, p.x, p.y) < 50) p.hp -= 15; });
+                        }
                     }
                 }
             }
