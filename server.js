@@ -595,8 +595,10 @@ io.on('connection', (socket) => {
 setInterval(() => {
     const now = Date.now();
     for (const roomId in ROOMS) {
-        const room = ROOMS[roomId];
-        if (room.paused || room.isGameOver) continue;
+        try {
+            const room = ROOMS[roomId];
+            if (!room) continue;
+            if (room.paused || room.isGameOver) continue;
         
         room.time += 1 / 20;
         
@@ -657,7 +659,12 @@ setInterval(() => {
                 possessed: false,
                 stolenGems: 0,
                 exploding: false,
-                explodeTime: 0
+                explodeTime: 0,
+                jumpState: 'WALKING',
+                jumpProgress: 0,
+                jumpStart: { x: x, y: y },
+                jumpTarget: { x: x, y: y },
+                prepTime: 0
             });
             
             // Náhodné generování meteorů (překážek)
@@ -840,6 +847,11 @@ setInterval(() => {
                         }
                     }
                 }
+                
+                // Finální kontrola souřadnic (proti NaN)
+                if (isNaN(enemy.x) || isNaN(enemy.y)) {
+                    enemy.x = 0; enemy.y = 0;
+                }
             }
         });
 
@@ -854,6 +866,9 @@ setInterval(() => {
             roomInfo: { level: room.level, xp: room.xp, nextLevelXp: room.nextLevelXp },
             frozen: false
         });
+        } catch (err) {
+            console.error(`Chyba v místnosti ${roomId}:`, err);
+        }
     }
 }, 50);
 
