@@ -242,14 +242,29 @@ io.on('connection', (socket) => {
 
     socket.on('deleteAccount', (data) => {
         const { user, pass } = data;
-        if (!user || !pass) return;
+        console.log(`[DELETE] Žádost o smazání účtu: "${user}"`);
+        if (!user || !pass) {
+            console.log(`[DELETE] Neúspěch: Chybějící údaje.`);
+            return;
+        }
         db.get(`SELECT id FROM accounts WHERE username = ? AND password = ?`, [user, pass], (err, row) => {
             if (row) {
-                db.run(`DELETE FROM accounts WHERE id = ?`, [row.id], () => {
-                    broadcastLeaderboard();
-                    socket.emit('accountDeleted', { success: true });
+                console.log(`[DELETE] Účet nalezen (ID: ${row.id}), provádím smazání přes username "${user}"...`);
+                db.run(`DELETE FROM accounts WHERE username = ?`, [user], function(err) {
+                    if (err) {
+                        console.error(`[DELETE] CHYBA při mazání:`, err);
+                        socket.emit('accountDeleted', { success: false, msg: "Interní chyba serveru." });
+                    } else if (this.changes > 0) {
+                        console.log(`[DELETE] Účet "${user}" byl úspěšně smazán (Změn: ${this.changes}).`);
+                        broadcastLeaderboard();
+                        socket.emit('accountDeleted', { success: true });
+                    } else {
+                        console.log(`[DELETE] Neúspěch: Žádné řádky nebyly smazány.`);
+                        socket.emit('accountDeleted', { success: false, msg: "Smazání se nezdařilo." });
+                    }
                 });
             } else {
+                console.log(`[DELETE] Neúspěch: Účet "${user}" nenalezen nebo špatné heslo.`);
                 socket.emit('accountDeleted', { success: false, msg: "Účet nenalezen nebo špatné heslo." });
             }
         });
