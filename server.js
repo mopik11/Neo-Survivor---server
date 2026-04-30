@@ -247,7 +247,10 @@ io.on('connection', (socket) => {
             if (row) {
                 db.run(`DELETE FROM accounts WHERE id = ?`, [row.id], () => {
                     broadcastLeaderboard();
+                    socket.emit('accountDeleted', { success: true });
                 });
+            } else {
+                socket.emit('accountDeleted', { success: false, msg: "Účet nenalezen nebo špatné heslo." });
             }
         });
     });
