@@ -264,7 +264,7 @@ io.on('connection', (socket) => {
                 if (!parsedMeta.selectedAbility) parsedMeta.selectedAbility = 1;
                 socket.emit('loginResponse', { success: true, meta: parsedMeta });
             } else {
-                socket.emit('loginResponse', { success: false, msg: 'Špatné jméno nebo heslo.' });
+                socket.emit('loginResponse', { success: false, msg: "Účet neexistuje nebo špatné heslo. Pokud účet nemáš, zaregistruj se!" });
             }
         });
     });
