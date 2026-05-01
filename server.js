@@ -273,7 +273,7 @@ io.on('connection', (socket) => {
             return;
         }
         console.log(`[DELETE] Checking credentials for: "${user}"`);
-        db.get(`SELECT id, password FROM accounts WHERE username = ?`, [user], (err, row) => {
+        db.get(`SELECT password FROM accounts WHERE username = ?`, [user], (err, row) => {
             if (err) console.error(`[DELETE] DB Get Error:`, err);
             
             if (row) {
