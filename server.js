@@ -177,10 +177,23 @@ io.on('connection', (socket) => {
         }
         else if (cmd === 'delete') {
             if (!target) return socket.emit('adminResponse', { msg: "Použití: delete <jméno>", color: "yellow" });
-            db.run(`DELETE FROM accounts WHERE username = ?`, [target], function (err) {
-                if (this.changes > 0) socket.emit('adminResponse', { msg: `Účet ${target} byl smazán.`, color: "lime" });
-                else socket.emit('adminResponse', { msg: `Hráč ${target} nenalezen.`, color: "red" });
+            const lowTarget = target.toLowerCase().trim();
+            db.run(`DELETE FROM accounts WHERE username = ?`, [lowTarget], function (err) {
+                if (this.changes > 0) socket.emit('adminResponse', { msg: `Účet ${lowTarget} byl smazán.`, color: "lime" });
+                else socket.emit('adminResponse', { msg: `Hráč ${lowTarget} nenalezen.`, color: "red" });
                 broadcastLeaderboard();
+            });
+        } 
+        else if (cmd === 'forcedelete') {
+            if (!target) return socket.emit('adminResponse', { msg: "Použití: forcedelete <jméno>", color: "yellow" });
+            const lowTarget = target.toLowerCase().trim();
+            db.run(`DELETE FROM accounts WHERE username = ?`, [lowTarget], function (err) {
+                if (this.changes > 0) {
+                    socket.emit('adminResponse', { msg: `ÚČET ${lowTarget} BYL NATVRDO SMAZÁN.`, color: "lime" });
+                    broadcastLeaderboard();
+                } else {
+                    socket.emit('adminResponse', { msg: `Hráč ${lowTarget} nenalezen.`, color: "red" });
+                }
             });
         }
         else if (cmd === 'rooms') {
@@ -235,12 +248,15 @@ io.on('connection', (socket) => {
                 selectedAbility: 1
             };
 
+            console.log(`[REGISTER] Creating new account: "${user}"`);
             db.run(`INSERT INTO accounts (username, password, meta, max_level) VALUES (?, ?, ?, ?)`,
                 [user, pass, JSON.stringify(defaultMeta), 1],
                 (err) => {
                     if (err) {
+                        console.error(`[REGISTER] DB Error:`, err);
                         return socket.emit('registerResponse', { success: false, msg: 'Chyba při zápisu do databáze.' });
                     }
+                    console.log(`[REGISTER] Success: "${user}"`);
                     socket.emit('registerResponse', { success: true, meta: defaultMeta });
                     broadcastLeaderboard();
                 });
@@ -256,25 +272,31 @@ io.on('connection', (socket) => {
             console.log(`[DELETE] Neúspěch: Chybějící heslo.`);
             return;
         }
-        db.get(`SELECT id FROM accounts WHERE username = ? AND password = ?`, [user, pass], (err, row) => {
+        console.log(`[DELETE] Checking credentials for: "${user}"`);
+        db.get(`SELECT id, password FROM accounts WHERE username = ?`, [user], (err, row) => {
+            if (err) console.error(`[DELETE] DB Get Error:`, err);
+            
             if (row) {
-                console.log(`[DELETE] Účet nalezen (ID: ${row.id}), provádím smazání přes username "${user}"...`);
-                db.run(`DELETE FROM accounts WHERE username = ?`, [user], function (err) {
-                    if (err) {
-                        console.error(`[DELETE] CHYBA při mazání:`, err);
-                        socket.emit('accountDeleted', { success: false, msg: "Interní chyba serveru." });
-                    } else if (this.changes > 0) {
-                        console.log(`[DELETE] Účet "${user}" byl úspěšně smazán (Změn: ${this.changes}).`);
-                        broadcastLeaderboard();
-                        socket.emit('accountDeleted', { success: true });
-                    } else {
-                        console.log(`[DELETE] Neúspěch: Žádné řádky nebyly smazány.`);
-                        socket.emit('accountDeleted', { success: false, msg: "Smazání se nezdařilo." });
-                    }
-                });
+                console.log(`[DELETE] Found user. Comparing passwords... (Input: "${pass}", DB: "${row.password}")`);
+                if (row.password === pass) {
+                    console.log(`[DELETE] Password match. Deleting...`);
+                    db.run(`DELETE FROM accounts WHERE username = ?`, [user], function (err) {
+                        if (err) {
+                            console.error(`[DELETE] DB Delete Error:`, err);
+                            socket.emit('accountDeleted', { success: false, msg: "Chyba při mazání." });
+                        } else {
+                            console.log(`[DELETE] Success. Changes: ${this.changes}`);
+                            broadcastLeaderboard();
+                            socket.emit('accountDeleted', { success: true });
+                        }
+                    });
+                } else {
+                    console.log(`[DELETE] Password mismatch!`);
+                    socket.emit('accountDeleted', { success: false, msg: "Špatné heslo." });
+                }
             } else {
-                console.log(`[DELETE] Neúspěch: Účet "${user}" nenalezen nebo špatné heslo.`);
-                socket.emit('accountDeleted', { success: false, msg: "Účet nenalezen nebo špatné heslo." });
+                console.log(`[DELETE] User "${user}" not found in DB.`);
+                socket.emit('accountDeleted', { success: false, msg: "Účet nenalezen." });
             }
         });
     });
@@ -283,14 +305,25 @@ io.on('connection', (socket) => {
         let { user, pass } = data;
         if (!user) return;
         user = user.toLowerCase().trim();
-        db.get(`SELECT meta FROM accounts WHERE username = ? AND password = ?`, [user, pass], (err, row) => {
+        console.log(`[LOGIN] Attempt: "${user}"`);
+        db.get(`SELECT password, meta FROM accounts WHERE username = ?`, [user], (err, row) => {
+            if (err) console.error(`[LOGIN] DB Error:`, err);
+            
             if (row) {
-                const parsedMeta = JSON.parse(row.meta);
-                if (!parsedMeta.abilities) parsedMeta.abilities = { 1: true, 2: false, 3: false };
-                if (!parsedMeta.selectedAbility) parsedMeta.selectedAbility = 1;
-                socket.emit('loginResponse', { success: true, meta: parsedMeta });
+                console.log(`[LOGIN] User found. Pass check: Input="${pass}", DB="${row.password}"`);
+                if (row.password === pass) {
+                    const parsedMeta = JSON.parse(row.meta);
+                    if (!parsedMeta.abilities) parsedMeta.abilities = { 1: true, 2: false, 3: false };
+                    if (!parsedMeta.selectedAbility) parsedMeta.selectedAbility = 1;
+                    console.log(`[LOGIN] Success: "${user}"`);
+                    socket.emit('loginResponse', { success: true, meta: parsedMeta });
+                } else {
+                    console.log(`[LOGIN] Wrong password for "${user}"`);
+                    socket.emit('loginResponse', { success: false, msg: "Špatné heslo!" });
+                }
             } else {
-                socket.emit('loginResponse', { success: false, msg: "Účet neexistuje nebo špatné heslo. Pokud účet nemáš, zaregistruj se!" });
+                console.log(`[LOGIN] User "${user}" not found.`);
+                socket.emit('loginResponse', { success: false, msg: "Účet neexistuje. Zaregistruj se!" });
             }
         });
     });
